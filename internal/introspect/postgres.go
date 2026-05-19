@@ -42,14 +42,9 @@ func (d *postgresDriver) Introspect(ctx context.Context) (Schema, error) {
 		return Schema{}, fmt.Errorf("fetch foreign keys: %w", err)
 	}
 
-	enums, err := d.fetchEnums(ctx)
+	enumLabels, err := d.fetchEnums(ctx)
 	if err != nil {
 		return Schema{}, fmt.Errorf("fetch enums: %w", err)
-	}
-
-	enumNames := make(map[string]struct{}, len(enums))
-	for _, e := range enums {
-		enumNames[e.Name] = struct{}{}
 	}
 
 	names := slices.Sorted(maps.Keys(tables))
@@ -57,7 +52,11 @@ func (d *postgresDriver) Introspect(ctx context.Context) (Schema, error) {
 	for _, n := range names {
 		t := tables[n]
 		for i := range t.Columns {
-			t.Columns[i].Kind = pgKind(t.Columns[i].DataType, t.Columns[i].UDTName, enumNames)
+			c := &t.Columns[i]
+			c.Kind = pgKind(c.DataType, c.UDTName, enumLabels)
+			if c.Kind == KindEnum {
+				c.EnumValues = enumLabels[c.UDTName]
+			}
 		}
 		for _, fk := range t.ForeignKeys {
 			if len(fk.Columns) > 1 {
@@ -70,10 +69,10 @@ func (d *postgresDriver) Introspect(ctx context.Context) (Schema, error) {
 		out = append(out, *t)
 	}
 
-	return Schema{Tables: out, Enums: enums}, nil
+	return Schema{Tables: out}, nil
 }
 
-func pgKind(dataType, udtName string, enums map[string]struct{}) Kind {
+func pgKind(dataType, udtName string, enums map[string][]string) Kind {
 	switch dataType {
 	case "boolean":
 		return KindBool
@@ -265,29 +264,23 @@ WHERE n.nspname = 'public'
 ORDER BY t.typname, e.enumsortorder
 `
 
-func (d *postgresDriver) fetchEnums(ctx context.Context) ([]Enum, error) {
+func (d *postgresDriver) fetchEnums(ctx context.Context) (map[string][]string, error) {
 	rows, err := d.conn.Query(ctx, pgEnumsQuery)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
 	}
 	defer rows.Close()
 
-	values := make(map[string][]string)
+	out := make(map[string][]string)
 	for rows.Next() {
 		var name, label string
 		if err := rows.Scan(&name, &label); err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
 		}
-		values[name] = append(values[name], label)
+		out[name] = append(out[name], label)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows: %w", err)
-	}
-
-	names := slices.Sorted(maps.Keys(values))
-	out := make([]Enum, 0, len(names))
-	for _, n := range names {
-		out = append(out, Enum{Name: n, Values: values[n]})
 	}
 
 	return out, nil

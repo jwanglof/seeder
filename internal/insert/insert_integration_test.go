@@ -63,9 +63,9 @@ CREATE TABLE blobs (
 
 //nolint:paralleltest,tparallel // mutates the public schema
 func TestRun_Basic(t *testing.T) {
-	dsn := os.Getenv("SEEDER_TEST_DSN")
+	dsn := os.Getenv("SEEDER_TEST_DSN_POSTGRES")
 	if dsn == "" {
-		t.Skip("SEEDER_TEST_DSN not set")
+		t.Skip("SEEDER_TEST_DSN_POSTGRES not set")
 	}
 
 	ctx := t.Context()
@@ -172,9 +172,9 @@ func TestRun_Basic(t *testing.T) {
 
 //nolint:paralleltest,tparallel // mutates the public schema
 func TestRun_Determinism(t *testing.T) {
-	dsn := os.Getenv("SEEDER_TEST_DSN")
+	dsn := os.Getenv("SEEDER_TEST_DSN_POSTGRES")
 	if dsn == "" {
-		t.Skip("SEEDER_TEST_DSN not set")
+		t.Skip("SEEDER_TEST_DSN_POSTGRES not set")
 	}
 
 	ctx := t.Context()
@@ -235,9 +235,9 @@ func TestRun_Determinism(t *testing.T) {
 
 //nolint:paralleltest,tparallel // mutates the public schema
 func TestRun_DryRun(t *testing.T) {
-	dsn := os.Getenv("SEEDER_TEST_DSN")
+	dsn := os.Getenv("SEEDER_TEST_DSN_POSTGRES")
 	if dsn == "" {
-		t.Skip("SEEDER_TEST_DSN not set")
+		t.Skip("SEEDER_TEST_DSN_POSTGRES not set")
 	}
 
 	ctx := t.Context()
@@ -275,9 +275,9 @@ func TestRun_DryRun(t *testing.T) {
 
 //nolint:paralleltest,tparallel // mutates the public schema
 func TestRun_Truncate(t *testing.T) {
-	dsn := os.Getenv("SEEDER_TEST_DSN")
+	dsn := os.Getenv("SEEDER_TEST_DSN_POSTGRES")
 	if dsn == "" {
-		t.Skip("SEEDER_TEST_DSN not set")
+		t.Skip("SEEDER_TEST_DSN_POSTGRES not set")
 	}
 
 	ctx := t.Context()

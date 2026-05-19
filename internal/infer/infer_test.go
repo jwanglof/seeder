@@ -54,7 +54,7 @@ func TestPick_ByName(t *testing.T) {
 		t.Run(tc.col, func(t *testing.T) {
 			t.Parallel()
 			f := gofakeit.New(42)
-			gen := infer.Pick(f, introspect.Column{Name: tc.col, Kind: tc.kind}, nil)
+			gen := infer.Pick(f, introspect.Column{Name: tc.col, Kind: tc.kind})
 			tc.check(t, gen())
 		})
 	}
@@ -67,7 +67,7 @@ func TestPick_KindMismatchFallsBack(t *testing.T) {
 	// `age` matches the name rule but the column is text — the rule should be
 	// skipped and the generator should fall back to KindString.
 	col := introspect.Column{Name: "age", Kind: introspect.KindString}
-	gen := infer.Pick(f, col, nil)
+	gen := infer.Pick(f, col)
 	v := gen()
 	if _, ok := v.(string); !ok {
 		t.Errorf("age text fallback = %T; want string", v)
@@ -83,7 +83,7 @@ func TestPick_FallsBackToKind(t *testing.T) {
 		DataType: "integer",
 		Kind:     introspect.KindInt,
 	}
-	gen := infer.Pick(f, col, nil)
+	gen := infer.Pick(f, col)
 	v := gen()
 	if _, ok := v.(int); !ok {
 		t.Errorf("fallback for KindInt = %T; want int", v)
@@ -93,15 +93,15 @@ func TestPick_FallsBackToKind(t *testing.T) {
 func TestPick_EnumByKind(t *testing.T) {
 	t.Parallel()
 
-	enums := map[string][]string{"order_status": {"pending", "paid", "shipped"}}
 	f := gofakeit.New(42)
 	col := introspect.Column{
-		Name:     "status",
-		DataType: "USER-DEFINED",
-		UDTName:  "order_status",
-		Kind:     introspect.KindEnum,
+		Name:       "status",
+		DataType:   "USER-DEFINED",
+		UDTName:    "order_status",
+		EnumValues: []string{"pending", "paid", "shipped"},
+		Kind:       introspect.KindEnum,
 	}
-	gen := infer.Pick(f, col, enums)
+	gen := infer.Pick(f, col)
 	v := gen()
 	s, ok := v.(string)
 	if !ok {
@@ -161,10 +161,9 @@ func TestExplain(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name  string
-		col   introspect.Column
-		enums map[string][]string
-		want  string
+		name string
+		col  introspect.Column
+		want string
 	}{
 		{
 			name: "name match",
@@ -177,13 +176,12 @@ func TestExplain(t *testing.T) {
 			want: "kind: string",
 		},
 		{
-			name:  "enum with known UDT",
-			col:   introspect.Column{Name: "status", Kind: introspect.KindEnum, UDTName: "order_status"},
-			enums: map[string][]string{"order_status": {"a", "b"}},
-			want:  "enum: order_status",
+			name: "enum with labels",
+			col:  introspect.Column{Name: "status", Kind: introspect.KindEnum, EnumValues: []string{"a", "b"}},
+			want: "enum: a,b",
 		},
 		{
-			name: "enum without known UDT falls back to kind",
+			name: "enum without labels falls back to kind",
 			col:  introspect.Column{Name: "status", Kind: introspect.KindEnum},
 			want: "kind: enum",
 		},
@@ -196,7 +194,7 @@ func TestExplain(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := infer.Explain(tc.col, tc.enums); got != tc.want {
+			if got := infer.Explain(tc.col); got != tc.want {
 				t.Errorf("Explain = %q; want %q", got, tc.want)
 			}
 		})

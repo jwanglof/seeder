@@ -37,7 +37,7 @@ func TestFromKind(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			f := gofakeit.New(42)
-			gen := generator.FromKind(f, tc.kind, "", nil)
+			gen := generator.FromKind(f, tc.kind, nil)
 			v := gen()
 			if kindOf(v) != tc.wantKind {
 				t.Errorf("FromKind(%v) returned %T; want kind %s", tc.kind, v, tc.wantKind)
@@ -49,11 +49,9 @@ func TestFromKind(t *testing.T) {
 func TestFromKind_Enum(t *testing.T) {
 	t.Parallel()
 
-	enums := map[string][]string{
-		"order_status": {"pending", "paid", "shipped"},
-	}
+	labels := []string{"pending", "paid", "shipped"}
 	f := gofakeit.New(42)
-	gen := generator.FromKind(f, introspect.KindEnum, "order_status", enums)
+	gen := generator.FromKind(f, introspect.KindEnum, labels)
 
 	for range 200 {
 		v := gen()
@@ -61,19 +59,19 @@ func TestFromKind_Enum(t *testing.T) {
 		if !ok {
 			t.Fatalf("enum value type = %T; want string", v)
 		}
-		if !slices.Contains(enums["order_status"], s) {
-			t.Errorf("value %q not in enum labels %v", s, enums["order_status"])
+		if !slices.Contains(labels, s) {
+			t.Errorf("value %q not in enum labels %v", s, labels)
 		}
 	}
 }
 
-func TestFromKind_UnknownEnum(t *testing.T) {
+func TestFromKind_EmptyEnum(t *testing.T) {
 	t.Parallel()
 
 	f := gofakeit.New(42)
-	gen := generator.FromKind(f, introspect.KindEnum, "missing_enum", nil)
+	gen := generator.FromKind(f, introspect.KindEnum, nil)
 	if v := gen(); v != nil {
-		t.Errorf("unknown enum = %v; want nil", v)
+		t.Errorf("empty enum = %v; want nil", v)
 	}
 }
 
@@ -81,7 +79,7 @@ func TestFromKind_JSONIsValid(t *testing.T) {
 	t.Parallel()
 
 	f := gofakeit.New(42)
-	gen := generator.FromKind(f, introspect.KindJSON, "", nil)
+	gen := generator.FromKind(f, introspect.KindJSON, nil)
 	for range 20 {
 		v := gen()
 		s, ok := v.(string)
@@ -100,8 +98,8 @@ func TestFromKind_DeterministicWithSeed(t *testing.T) {
 
 	f1 := gofakeit.New(42)
 	f2 := gofakeit.New(42)
-	g1 := generator.FromKind(f1, introspect.KindInt, "", nil)
-	g2 := generator.FromKind(f2, introspect.KindInt, "", nil)
+	g1 := generator.FromKind(f1, introspect.KindInt, nil)
+	g2 := generator.FromKind(f2, introspect.KindInt, nil)
 
 	for range 100 {
 		if g1() != g2() {

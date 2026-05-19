@@ -51,11 +51,6 @@ func Run(
 	}
 	defer func() { _ = drv.Close(ctx) }()
 
-	enums := make(map[string][]string, len(schema.Enums))
-	for _, e := range schema.Enums {
-		enums[e.Name] = e.Values
-	}
-
 	byName := make(map[string]introspect.Table, len(schema.Tables))
 	for _, t := range schema.Tables {
 		byName[t.Name] = t
@@ -84,7 +79,7 @@ func Run(
 		if !ok {
 			return stats, fmt.Errorf("table %q not in schema", name)
 		}
-		s, err := insertTable(ctx, drv, t, opts, faker, enums, pool, poolCols[name], out)
+		s, err := insertTable(ctx, drv, t, opts, faker, pool, poolCols[name], out)
 		if err != nil {
 			return stats, fmt.Errorf("insert %s: %w", name, err)
 		}
@@ -131,7 +126,7 @@ type fkSpec struct {
 	col   string
 }
 
-func planColumns(t introspect.Table, faker *gofakeit.Faker, enums map[string][]string) []colSpec {
+func planColumns(t introspect.Table, faker *gofakeit.Faker) []colSpec {
 	cols := make([]colSpec, 0, len(t.Columns))
 	for _, c := range t.Columns {
 		if c.IsIdentity {
@@ -145,7 +140,7 @@ func planColumns(t introspect.Table, faker *gofakeit.Faker, enums map[string][]s
 		if fk, ok := findFK(t, c.Name); ok {
 			spec.fk = fk
 		} else {
-			spec.gen = infer.Pick(faker, c, enums)
+			spec.gen = infer.Pick(faker, c)
 		}
 		cols = append(cols, spec)
 	}
@@ -181,7 +176,6 @@ func insertTable(
 	t introspect.Table,
 	opts Options,
 	faker *gofakeit.Faker,
-	enums map[string][]string,
 	pool map[string]map[string][]any,
 	poolCols []string,
 	out io.Writer,
@@ -192,10 +186,10 @@ func insertTable(
 	}
 
 	if opts.Verbose {
-		explainTable(t, enums, out)
+		explainTable(t, out)
 	}
 
-	cols := planColumns(t, faker, enums)
+	cols := planColumns(t, faker)
 	if len(cols) == 0 {
 		if rows > 0 && !opts.DryRun {
 			return Stats{Table: t.Name}, errNoWritableColumns
@@ -275,14 +269,14 @@ func joinColNames(cols []colSpec) string {
 	return strings.Join(names, ", ")
 }
 
-func explainTable(t introspect.Table, enums map[string][]string, out io.Writer) {
+func explainTable(t introspect.Table, out io.Writer) {
 	fmt.Fprintf(out, "  %s\n", t.Name)
 	for _, c := range t.Columns {
-		fmt.Fprintf(out, "    %s\t%s\n", c.Name, explainColumn(t, c, enums))
+		fmt.Fprintf(out, "    %s\t%s\n", c.Name, explainColumn(t, c))
 	}
 }
 
-func explainColumn(t introspect.Table, c introspect.Column, enums map[string][]string) string {
+func explainColumn(t introspect.Table, c introspect.Column) string {
 	if c.IsIdentity {
 		return "skip: identity"
 	}
@@ -293,5 +287,5 @@ func explainColumn(t introspect.Table, c introspect.Column, enums map[string][]s
 		return fmt.Sprintf("fk: %s.%s", fk.table, fk.col)
 	}
 
-	return infer.Explain(c, enums)
+	return infer.Explain(c)
 }

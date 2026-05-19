@@ -1,0 +1,178 @@
+//go:build integration
+
+package insert_test
+
+import (
+	"bytes"
+	"context"
+	"database/sql"
+	"os"
+	"strings"
+	"testing"
+
+	_ "github.com/go-sql-driver/mysql"
+
+	"github.com/mickamy/seeder/internal/dsn"
+	"github.com/mickamy/seeder/internal/insert"
+	"github.com/mickamy/seeder/internal/introspect"
+	"github.com/mickamy/seeder/internal/plan"
+)
+
+const mysqlInsertSchemaSQL = `
+DROP TABLE IF EXISTS comments;
+DROP TABLE IF EXISTS orders;
+DROP TABLE IF EXISTS users;
+
+CREATE TABLE users (
+    id         INT AUTO_INCREMENT PRIMARY KEY,
+    email      VARCHAR(255) NOT NULL,
+    name       VARCHAR(255),
+    bio        TEXT,
+    is_active  TINYINT(1)   NOT NULL DEFAULT 1,
+    created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE orders (
+    id      INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    status  ENUM('pending','paid','shipped') NOT NULL,
+    amount  INT,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE TABLE comments (
+    id       INT AUTO_INCREMENT PRIMARY KEY,
+    user_id  INT NOT NULL,
+    order_id INT,
+    body     TEXT,
+    FOREIGN KEY (user_id)  REFERENCES users(id),
+    FOREIGN KEY (order_id) REFERENCES orders(id)
+)
+`
+
+//nolint:paralleltest,tparallel // mutates schema; cannot run in parallel
+func TestRun_MySQL_Basic(t *testing.T) {
+	rawDSN := os.Getenv("SEEDER_TEST_DSN_MYSQL")
+	if rawDSN == "" {
+		t.Skip("SEEDER_TEST_DSN_MYSQL not set")
+	}
+
+	driverDSN, err := dsn.ToMySQLDSN(rawDSN)
+	if err != nil {
+		t.Fatalf("ToMySQLDSN: %v", err)
+	}
+	db, err := sql.Open("mysql", driverDSN)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	ctx := t.Context()
+	if err := applyMySQLInsertSchema(ctx, db, mysqlInsertSchemaSQL); err != nil {
+		t.Fatalf("apply schema: %v", err)
+	}
+
+	schema, err := introspect.Do(ctx, rawDSN)
+	if err != nil {
+		t.Fatalf("introspect: %v", err)
+	}
+
+	order, err := plan.Build(schema.Tables)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	var buf bytes.Buffer
+	seed := uint64(42)
+	stats, err := insert.Run(ctx, rawDSN, schema, order, insert.Options{
+		Rows: 25,
+		Seed: &seed,
+	}, &buf)
+	if err != nil {
+		t.Fatalf("insert.Run: %v", err)
+	}
+
+	wantTables := map[string]bool{"users": true, "orders": true, "comments": true}
+	for _, s := range stats {
+		if !wantTables[s.Table] {
+			t.Errorf("unexpected table in stats: %s", s.Table)
+		}
+		if s.Rows != 25 {
+			t.Errorf("%s rows = %d; want 25", s.Table, s.Rows)
+		}
+	}
+
+	for table := range wantTables {
+		var n int
+		row := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM `"+table+"`")
+		if err := row.Scan(&n); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if n != 25 {
+			t.Errorf("%s count = %d; want 25", table, n)
+		}
+	}
+}
+
+//nolint:paralleltest,tparallel // mutates schema; cannot run in parallel
+func TestRun_MySQL_Truncate(t *testing.T) {
+	rawDSN := os.Getenv("SEEDER_TEST_DSN_MYSQL")
+	if rawDSN == "" {
+		t.Skip("SEEDER_TEST_DSN_MYSQL not set")
+	}
+
+	driverDSN, err := dsn.ToMySQLDSN(rawDSN)
+	if err != nil {
+		t.Fatalf("ToMySQLDSN: %v", err)
+	}
+	db, err := sql.Open("mysql", driverDSN)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	ctx := t.Context()
+	if err := applyMySQLInsertSchema(ctx, db, mysqlInsertSchemaSQL); err != nil {
+		t.Fatalf("apply schema: %v", err)
+	}
+
+	schema, err := introspect.Do(ctx, rawDSN)
+	if err != nil {
+		t.Fatalf("introspect: %v", err)
+	}
+	order, err := plan.Build(schema.Tables)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	seed := uint64(42)
+	var buf bytes.Buffer
+	if _, err := insert.Run(ctx, rawDSN, schema, order, insert.Options{Rows: 10, Seed: &seed}, &buf); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if _, err := insert.Run(ctx, rawDSN, schema, order, insert.Options{Rows: 10, Seed: &seed, Truncate: true}, &buf); err != nil {
+		t.Fatalf("truncate run: %v", err)
+	}
+
+	var n int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM `users`").Scan(&n); err != nil {
+		t.Fatalf("count users: %v", err)
+	}
+	if n != 10 {
+		t.Errorf("after truncate+insert users count = %d; want 10 (FK checks disabled during truncate)", n)
+	}
+}
+
+func applyMySQLInsertSchema(ctx context.Context, db *sql.DB, schemaSQL string) error {
+	for _, stmt := range strings.Split(schemaSQL, ";") {
+		stmt = strings.TrimSpace(stmt)
+		if stmt == "" {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
