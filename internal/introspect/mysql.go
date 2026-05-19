@@ -219,9 +219,14 @@ func (d *mySQLDriver) fetchForeignKeys(ctx context.Context, tables map[string]*T
 }
 
 func mySQLKind(dataType, columnType string) (Kind, []string) {
+	ct := strings.ToLower(strings.TrimSpace(columnType))
 	switch strings.ToLower(dataType) {
 	case "tinyint":
-		if strings.EqualFold(columnType, "tinyint(1)") {
+		// `tinyint(1)` is boolean by MySQL convention; modifiers such as
+		// `unsigned` are tolerated (e.g., `tinyint(1) unsigned`). The
+		// display-width `(1)` is deprecated in MySQL 8.0.17+; columns that
+		// drop it fall through to KindInt here.
+		if ct == "tinyint(1)" || strings.HasPrefix(ct, "tinyint(1) ") {
 			return KindBool, nil
 		}
 
@@ -245,7 +250,12 @@ func mySQLKind(dataType, columnType string) (Kind, []string) {
 	case "enum", "set":
 		return KindEnum, parseMySQLEnumLabels(columnType)
 	case "bit":
-		return KindBool, nil
+		// `bit(1)` behaves like boolean; wider bit fields are byte-strings.
+		if ct == "bit(1)" || strings.HasPrefix(ct, "bit(1) ") {
+			return KindBool, nil
+		}
+
+		return KindBytes, nil
 	}
 
 	return KindUnknown, nil

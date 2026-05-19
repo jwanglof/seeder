@@ -3,6 +3,7 @@ package insert
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"strings"
 
@@ -59,7 +60,14 @@ func (d *mySQLDriver) Truncate(ctx context.Context, tables []string) error {
 		return fmt.Errorf("disable FK checks: %w", err)
 	}
 	defer func() {
-		_, _ = conn.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS=1")
+		// Restore FK checks even if the caller's ctx was canceled: returning
+		// a pooled conn with FK_CHECKS=0 would silently break later callers.
+		restoreCtx := context.WithoutCancel(ctx)
+		if _, err := conn.ExecContext(restoreCtx, "SET FOREIGN_KEY_CHECKS=1"); err != nil {
+			// Mark the conn bad so the pool drops it rather than reusing one
+			// stuck with FK checks disabled.
+			_ = conn.Raw(func(_ any) error { return driver.ErrBadConn })
+		}
 	}()
 
 	for _, t := range tables {
@@ -99,11 +107,16 @@ func (d *mySQLDriver) BulkInsert(ctx context.Context, table string, columns []st
 		args = append(args, row...)
 	}
 
-	if _, err := d.db.ExecContext(ctx, stmt, args...); err != nil {
+	res, err := d.db.ExecContext(ctx, stmt, args...)
+	if err != nil {
 		return 0, fmt.Errorf("exec: %w", err)
 	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("rows affected: %w", err)
+	}
 
-	return int64(len(rows)), nil
+	return n, nil
 }
 
 func (d *mySQLDriver) ColumnValues(
