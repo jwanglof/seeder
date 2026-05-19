@@ -1,0 +1,227 @@
+package insert
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"strings"
+	"time"
+
+	"github.com/brianvoe/gofakeit/v7"
+
+	"github.com/mickamy/seeder/internal/generator"
+	"github.com/mickamy/seeder/internal/infer"
+	"github.com/mickamy/seeder/internal/introspect"
+)
+
+type Options struct {
+	Rows     int
+	Truncate bool
+	DryRun   bool
+	Seed     uint64
+}
+
+type Stats struct {
+	Table string
+	Rows  int64
+	Took  time.Duration
+}
+
+func Run(
+	ctx context.Context,
+	dataSourceName string,
+	schema *introspect.Schema,
+	order []string,
+	opts Options,
+	out io.Writer,
+) ([]Stats, error) {
+	drv, err := openDriver(ctx, dataSourceName)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = drv.Close(ctx) }()
+
+	enums := make(map[string][]string, len(schema.Enums))
+	for _, e := range schema.Enums {
+		enums[e.Name] = e.Values
+	}
+
+	byName := make(map[string]introspect.Table, len(schema.Tables))
+	for _, t := range schema.Tables {
+		byName[t.Name] = t
+	}
+
+	seed := opts.Seed
+	if seed == 0 {
+		seed = uint64(time.Now().UnixNano())
+	}
+	faker := gofakeit.New(seed)
+
+	pool := make(map[string]map[string][]any)
+
+	if opts.Truncate && !opts.DryRun {
+		if err := drv.Truncate(ctx, order); err != nil {
+			return nil, fmt.Errorf("truncate: %w", err)
+		}
+	}
+
+	stats := make([]Stats, 0, len(order))
+	for _, name := range order {
+		t, ok := byName[name]
+		if !ok {
+			return stats, fmt.Errorf("table %q not in schema", name)
+		}
+		s, err := insertTable(ctx, drv, &t, opts, faker, enums, pool, out)
+		if err != nil {
+			return stats, fmt.Errorf("insert %s: %w", name, err)
+		}
+		stats = append(stats, s)
+	}
+
+	return stats, nil
+}
+
+type colSpec struct {
+	name     string
+	nullable bool
+	// gen is non-nil for a column whose value seeder generates itself.
+	// gen is nil for FK columns; in that case `fk` is meaningful.
+	gen generator.Func
+	fk  fkSpec
+}
+
+type fkSpec struct {
+	table string
+	col   string
+}
+
+func planColumns(t *introspect.Table, faker *gofakeit.Faker, enums map[string][]string) []colSpec {
+	cols := make([]colSpec, 0, len(t.Columns))
+	for _, c := range t.Columns {
+		if c.IsIdentity {
+			continue
+		}
+		if c.HasDefault && hasIntDefault(c.Kind) {
+			continue
+		}
+
+		spec := colSpec{name: c.Name, nullable: c.Nullable}
+		if fk, ok := findFK(t, c.Name); ok {
+			spec.fk = fk
+		} else {
+			spec.gen = infer.Pick(faker, c, enums)
+		}
+		cols = append(cols, spec)
+	}
+
+	return cols
+}
+
+// hasIntDefault returns true when an int-kind column is best left to the
+// database default. The common case is a serial / IDENTITY column where the
+// default is `nextval(...)`; we conservatively skip any int with a default
+// (e.g., a `DEFAULT 0` counter) rather than parse the raw default expression.
+// Parsing the expression so only true `nextval(...)` columns are skipped is
+// planned for V0.2.
+func hasIntDefault(kind introspect.Kind) bool {
+	return kind == introspect.KindInt
+}
+
+func findFK(t *introspect.Table, column string) (fkSpec, bool) {
+	for _, fk := range t.ForeignKeys {
+		for i, c := range fk.Columns {
+			if c == column {
+				return fkSpec{table: fk.ReferencedTable, col: fk.ReferencedColumns[i]}, true
+			}
+		}
+	}
+
+	return fkSpec{}, false
+}
+
+func insertTable(
+	ctx context.Context,
+	drv Driver,
+	t *introspect.Table,
+	opts Options,
+	faker *gofakeit.Faker,
+	enums map[string][]string,
+	pool map[string]map[string][]any,
+	out io.Writer,
+) (Stats, error) {
+	cols := planColumns(t, faker, enums)
+	if len(cols) == 0 {
+		fmt.Fprintf(out, "  %s\tskipped (no writable columns)\n", t.Name)
+
+		return Stats{Table: t.Name}, nil
+	}
+
+	if opts.DryRun {
+		fmt.Fprintf(out, "  %s\t%d rows (dry-run, columns: %s)\n", t.Name, opts.Rows, joinColNames(cols))
+
+		return Stats{Table: t.Name, Rows: int64(opts.Rows)}, nil
+	}
+
+	data := make([][]any, 0, opts.Rows)
+	for range opts.Rows {
+		row := make([]any, len(cols))
+		for j, c := range cols {
+			if c.gen == nil {
+				val, err := pickFK(faker, pool, c, t.Name)
+				if err != nil {
+					return Stats{Table: t.Name}, err
+				}
+				row[j] = val
+				continue
+			}
+			row[j] = c.gen()
+		}
+		data = append(data, row)
+	}
+
+	colNames := make([]string, len(cols))
+	for i, c := range cols {
+		colNames[i] = c.name
+	}
+
+	start := time.Now()
+	n, err := drv.BulkInsert(ctx, t.Name, colNames, data)
+	if err != nil {
+		return Stats{Table: t.Name}, fmt.Errorf("bulk insert: %w", err)
+	}
+	took := time.Since(start)
+
+	if len(t.PrimaryKey) > 0 {
+		pks, err := drv.PrimaryKeyValues(ctx, t.Name, t.PrimaryKey)
+		if err != nil {
+			return Stats{Table: t.Name, Rows: n, Took: took}, fmt.Errorf("primary keys: %w", err)
+		}
+		pool[t.Name] = pks
+	}
+
+	fmt.Fprintf(out, "  %s\t%d rows (%s)\n", t.Name, n, took.Truncate(time.Microsecond))
+
+	return Stats{Table: t.Name, Rows: n, Took: took}, nil
+}
+
+func pickFK(faker *gofakeit.Faker, pool map[string]map[string][]any, c colSpec, tableName string) (any, error) {
+	vals := pool[c.fk.table][c.fk.col]
+	if len(vals) == 0 {
+		if !c.nullable {
+			return nil, fmt.Errorf("FK target %s.%s has no rows but %s.%s is NOT NULL", c.fk.table, c.fk.col, tableName, c.name)
+		}
+
+		return nil, nil //nolint:nilnil // intentional NULL for a nullable FK with empty parent pool
+	}
+
+	return vals[faker.IntRange(0, len(vals)-1)], nil
+}
+
+func joinColNames(cols []colSpec) string {
+	names := make([]string, len(cols))
+	for i, c := range cols {
+		names[i] = c.name
+	}
+
+	return strings.Join(names, ", ")
+}
