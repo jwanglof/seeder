@@ -22,12 +22,25 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exit.OK
 	}
 
+	for _, a := range args {
+		switch a {
+		case "--version", "-v":
+			fmt.Fprintf(stdout, "seeder %s\n", version)
+
+			return exit.OK
+		case "--help", "-h":
+			cli.PrintUsage(stdout)
+
+			return exit.OK
+		}
+	}
+
 	switch args[0] {
-	case "--version", "-v", "version":
+	case "version":
 		fmt.Fprintf(stdout, "seeder %s\n", version)
 
 		return exit.OK
-	case "--help", "-h", "help":
+	case "help":
 		cli.PrintUsage(stdout)
 
 		return exit.OK
