@@ -28,7 +28,8 @@ type Options struct {
 	DryRun      bool
 	Verbose     bool
 	// Seed is nil for a time-based RNG seed.
-	Seed *uint64
+	Seed   *uint64
+	Locale infer.Locale
 }
 
 type Stats struct {
@@ -131,7 +132,7 @@ type fkSpec struct {
 	col   string
 }
 
-func planColumns(t introspect.Table, faker *gofakeit.Faker, enums map[string][]string) []colSpec {
+func planColumns(t introspect.Table, faker *gofakeit.Faker, enums map[string][]string, locale infer.Locale) []colSpec {
 	cols := make([]colSpec, 0, len(t.Columns))
 	for _, c := range t.Columns {
 		if c.IsIdentity {
@@ -145,7 +146,7 @@ func planColumns(t introspect.Table, faker *gofakeit.Faker, enums map[string][]s
 		if fk, ok := findFK(t, c.Name); ok {
 			spec.fk = fk
 		} else {
-			spec.gen = infer.Pick(faker, c, enums)
+			spec.gen = infer.Pick(faker, c, enums, locale)
 		}
 		cols = append(cols, spec)
 	}
@@ -195,7 +196,7 @@ func insertTable(
 		explainTable(t, enums, out)
 	}
 
-	cols := planColumns(t, faker, enums)
+	cols := planColumns(t, faker, enums, opts.Locale)
 	if len(cols) == 0 {
 		if rows > 0 && !opts.DryRun {
 			return Stats{Table: t.Name}, errNoWritableColumns

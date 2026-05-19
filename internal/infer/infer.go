@@ -11,11 +11,22 @@ import (
 	"github.com/mickamy/seeder/internal/introspect"
 )
 
+type localeGen func(*gofakeit.Faker) any
+
 type nameRule struct {
 	label string
 	re    *regexp.Regexp
 	kinds []introspect.Kind
-	gen   func(*gofakeit.Faker) any
+	// gens maps each supported locale to its generator. LocaleEN must always
+	// be present and acts as the fallback for locales without an entry.
+	gens map[Locale]localeGen
+}
+
+func (r nameRule) gen(locale Locale) localeGen {
+	if g, ok := r.gens[locale]; ok {
+		return g
+	}
+	return r.gens[LocaleEN]
 }
 
 var (
@@ -28,124 +39,171 @@ var (
 
 var nameRules = []nameRule{
 	{
-		"Email",
-		regexp.MustCompile(`(^|_)email(s)?$`),
-		stringKinds,
-		func(f *gofakeit.Faker) any { return f.Email() },
+		label: "Email",
+		re:    regexp.MustCompile(`(^|_)email(s)?$`),
+		kinds: stringKinds,
+		gens: map[Locale]localeGen{
+			LocaleEN: func(f *gofakeit.Faker) any { return f.Email() },
+		},
 	},
 	{
-		"FirstName",
-		regexp.MustCompile(`^first_name$|(^|_)given_name$`),
-		stringKinds,
-		func(f *gofakeit.Faker) any { return f.FirstName() },
+		label: "FirstName",
+		re:    regexp.MustCompile(`^first_name$|(^|_)given_name$`),
+		kinds: stringKinds,
+		gens: map[Locale]localeGen{
+			LocaleEN: func(f *gofakeit.Faker) any { return f.FirstName() },
+			LocaleJA: firstNameJA,
+		},
 	},
 	{
-		"LastName",
-		regexp.MustCompile(`^last_name$|^surname$|^family_name$`),
-		stringKinds,
-		func(f *gofakeit.Faker) any { return f.LastName() },
+		label: "LastName",
+		re:    regexp.MustCompile(`^last_name$|^surname$|^family_name$`),
+		kinds: stringKinds,
+		gens: map[Locale]localeGen{
+			LocaleEN: func(f *gofakeit.Faker) any { return f.LastName() },
+			LocaleJA: lastNameJA,
+		},
 	},
 	{
-		"Name",
-		regexp.MustCompile(`^name$|^full_name$|^username$|^user_name$|^nickname$|^display_name$`),
-		stringKinds,
-		func(f *gofakeit.Faker) any { return f.Name() },
+		label: "Name",
+		re:    regexp.MustCompile(`^name$|^full_name$|^username$|^user_name$|^nickname$|^display_name$`),
+		kinds: stringKinds,
+		gens: map[Locale]localeGen{
+			LocaleEN: func(f *gofakeit.Faker) any { return f.Name() },
+			LocaleJA: fullNameJA,
+		},
 	},
 	{
-		"Phone",
-		regexp.MustCompile(`(^|_)phone($|_number$)|^tel$|^mobile$`),
-		stringKinds,
-		func(f *gofakeit.Faker) any { return f.Phone() },
+		label: "Phone",
+		re:    regexp.MustCompile(`(^|_)phone($|_number$)|^tel$|^mobile$`),
+		kinds: stringKinds,
+		gens: map[Locale]localeGen{
+			LocaleEN: func(f *gofakeit.Faker) any { return f.Phone() },
+			LocaleJA: phoneJA,
+		},
 	},
 	{
-		"URL",
-		regexp.MustCompile(`(^|_)url$|^link$|^homepage$|^website$|^avatar(_url)?$|^image(_url)?$`),
-		stringKinds,
-		func(f *gofakeit.Faker) any { return f.URL() },
+		label: "URL",
+		re:    regexp.MustCompile(`(^|_)url$|^link$|^homepage$|^website$|^avatar(_url)?$|^image(_url)?$`),
+		kinds: stringKinds,
+		gens: map[Locale]localeGen{
+			LocaleEN: func(f *gofakeit.Faker) any { return f.URL() },
+		},
 	},
 	{
-		"Address",
-		regexp.MustCompile(`^address$|^street$`),
-		stringKinds,
-		func(f *gofakeit.Faker) any { return f.Address().Address },
+		label: "Address",
+		re:    regexp.MustCompile(`^address$|^street$`),
+		kinds: stringKinds,
+		gens: map[Locale]localeGen{
+			LocaleEN: func(f *gofakeit.Faker) any { return f.Address().Address },
+			LocaleJA: addressJA,
+		},
 	},
 	{
-		"City",
-		regexp.MustCompile(`^city$|^town$`),
-		stringKinds,
-		func(f *gofakeit.Faker) any { return f.City() },
+		label: "City",
+		re:    regexp.MustCompile(`^city$|^town$`),
+		kinds: stringKinds,
+		gens: map[Locale]localeGen{
+			LocaleEN: func(f *gofakeit.Faker) any { return f.City() },
+			LocaleJA: cityJA,
+		},
 	},
 	{
-		"Country",
-		regexp.MustCompile(`^country$|^prefecture$`),
-		stringKinds,
-		func(f *gofakeit.Faker) any { return f.Country() },
+		label: "Country",
+		re:    regexp.MustCompile(`^country$|^prefecture$`),
+		kinds: stringKinds,
+		gens: map[Locale]localeGen{
+			LocaleEN: func(f *gofakeit.Faker) any { return f.Country() },
+			LocaleJA: countryJA,
+		},
 	},
 	{
-		"State",
-		regexp.MustCompile(`^state$|^region$|^province$`),
-		stringKinds,
-		func(f *gofakeit.Faker) any { return f.State() },
+		label: "State",
+		re:    regexp.MustCompile(`^state$|^region$|^province$`),
+		kinds: stringKinds,
+		gens: map[Locale]localeGen{
+			LocaleEN: func(f *gofakeit.Faker) any { return f.State() },
+			LocaleJA: prefectureJA,
+		},
 	},
 	{
-		"Zip",
-		regexp.MustCompile(`^zip$|^zipcode$|^postal_code$|^postcode$`),
-		stringKinds,
-		func(f *gofakeit.Faker) any { return f.Zip() },
+		label: "Zip",
+		re:    regexp.MustCompile(`^zip$|^zipcode$|^postal_code$|^postcode$`),
+		kinds: stringKinds,
+		gens: map[Locale]localeGen{
+			LocaleEN: func(f *gofakeit.Faker) any { return f.Zip() },
+			LocaleJA: zipJA,
+		},
 	},
 	{
-		"LoremIpsumParagraph",
-		regexp.MustCompile(`^description$|^bio$|^comment$|^note$|^body$|^content$|^remarks?$`),
-		stringKinds,
-		func(f *gofakeit.Faker) any { return f.LoremIpsumParagraph(1, 5, 12, " ") },
+		label: "LoremIpsumParagraph",
+		re:    regexp.MustCompile(`^description$|^bio$|^comment$|^note$|^body$|^content$|^remarks?$`),
+		kinds: stringKinds,
+		gens: map[Locale]localeGen{
+			LocaleEN: func(f *gofakeit.Faker) any { return f.LoremIpsumParagraph(1, 5, 12, " ") },
+		},
 	},
 	{
-		"LoremIpsumSentence",
-		regexp.MustCompile(`^title$|^subject$|^headline$|^summary$`),
-		stringKinds,
-		func(f *gofakeit.Faker) any { return f.LoremIpsumSentence(10) },
+		label: "LoremIpsumSentence",
+		re:    regexp.MustCompile(`^title$|^subject$|^headline$|^summary$`),
+		kinds: stringKinds,
+		gens: map[Locale]localeGen{
+			LocaleEN: func(f *gofakeit.Faker) any { return f.LoremIpsumSentence(10) },
+		},
 	},
 	{
-		"Birthday",
-		regexp.MustCompile(`^birthday$|^birth_date$|^dob$`),
-		dateKinds,
-		func(f *gofakeit.Faker) any { return f.PastDate() },
+		label: "Birthday",
+		re:    regexp.MustCompile(`^birthday$|^birth_date$|^dob$`),
+		kinds: dateKinds,
+		gens: map[Locale]localeGen{
+			LocaleEN: func(f *gofakeit.Faker) any { return f.PastDate() },
+		},
 	},
 	{
-		"Age",
-		regexp.MustCompile(`(^|_)age$`),
-		intKinds,
-		func(f *gofakeit.Faker) any { return f.Age() },
+		label: "Age",
+		re:    regexp.MustCompile(`(^|_)age$`),
+		kinds: intKinds,
+		gens: map[Locale]localeGen{
+			LocaleEN: func(f *gofakeit.Faker) any { return f.Age() },
+		},
 	},
 	{
-		"PastDate",
-		regexp.MustCompile(`(^|_)at$`),
-		dateKinds,
-		func(f *gofakeit.Faker) any { return f.PastDate() },
+		label: "PastDate",
+		re:    regexp.MustCompile(`(^|_)at$`),
+		kinds: dateKinds,
+		gens: map[Locale]localeGen{
+			LocaleEN: func(f *gofakeit.Faker) any { return f.PastDate() },
+		},
 	},
 	{
-		"Money",
-		regexp.MustCompile(`^price$|^amount$|^cost$|^total$|(_yen|_usd|_jpy|_eur)$`),
-		moneyKinds,
-		func(f *gofakeit.Faker) any { return f.Number(1, 100000) },
+		label: "Money",
+		re:    regexp.MustCompile(`^price$|^amount$|^cost$|^total$|(_yen|_usd|_jpy|_eur)$`),
+		kinds: moneyKinds,
+		gens: map[Locale]localeGen{
+			LocaleEN: func(f *gofakeit.Faker) any { return f.Number(1, 100000) },
+		},
 	},
 	{
-		"Count",
-		regexp.MustCompile(`^count$|^quantity$|^qty$|^num$|^num_[a-z_]+$`),
-		intKinds,
-		func(f *gofakeit.Faker) any { return f.Number(0, 1000) },
+		label: "Count",
+		re:    regexp.MustCompile(`^count$|^quantity$|^qty$|^num$|^num_[a-z_]+$`),
+		kinds: intKinds,
+		gens: map[Locale]localeGen{
+			LocaleEN: func(f *gofakeit.Faker) any { return f.Number(0, 1000) },
+		},
 	},
 	{
-		"Bool",
-		regexp.MustCompile(`^is_[a-z_]+$|^has_[a-z_]+$|_flag$|^enabled$|^disabled$|^active$`),
-		boolKinds,
-		func(f *gofakeit.Faker) any { return f.Bool() },
+		label: "Bool",
+		re:    regexp.MustCompile(`^is_[a-z_]+$|^has_[a-z_]+$|_flag$|^enabled$|^disabled$|^active$`),
+		kinds: boolKinds,
+		gens: map[Locale]localeGen{
+			LocaleEN: func(f *gofakeit.Faker) any { return f.Bool() },
+		},
 	},
 }
 
-func Pick(f *gofakeit.Faker, col introspect.Column, enums map[string][]string) generator.Func {
+func Pick(f *gofakeit.Faker, col introspect.Column, enums map[string][]string, locale Locale) generator.Func {
 	if r, ok := matchRule(col); ok {
-		gen := r.gen
+		gen := r.gen(locale)
 
 		return func() any { return gen(f) }
 	}

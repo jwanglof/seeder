@@ -13,6 +13,7 @@ import (
 
 	"github.com/mickamy/seeder/internal/config"
 	"github.com/mickamy/seeder/internal/exit"
+	"github.com/mickamy/seeder/internal/infer"
 	"github.com/mickamy/seeder/internal/insert"
 	"github.com/mickamy/seeder/internal/introspect"
 	"github.com/mickamy/seeder/internal/plan"
@@ -34,6 +35,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	configPath := fs.String("config", "", "path to seeder.yaml (default: auto-detect in CWD)")
 	dryRun := fs.Bool("dry-run", false, "print plan, do not insert")
 	excludeArg := fs.String("exclude", "", "comma-separated tables to skip (mutually exclusive with --tables)")
+	localeArg := fs.String("locale", "", "locale for name-rule generators (en, ja; default: en)")
 	rows := fs.Int("rows", 1000, "rows per table")
 	seed := fs.Int64("seed", 0, "deterministic RNG seed (default: time-based when omitted)")
 	tablesArg := fs.String("tables", "", "comma-separated tables to include (default: all)")
@@ -71,6 +73,13 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	set := flagSet(fs)
 
 	cfg, err := configAt(*configPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "seeder: %v\n", err)
+
+		return exit.Usage
+	}
+
+	locale, err := infer.ParseLocale(*localeArg)
 	if err != nil {
 		fmt.Fprintf(stderr, "seeder: %v\n", err)
 
@@ -118,7 +127,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return exit.Error
 	}
 
-	opts := buildInsertOptions(*rows, *truncate, *seed, *dryRun, *verbose, set, cfg)
+	opts := buildInsertOptions(*rows, *truncate, *seed, *dryRun, *verbose, locale, set, cfg)
 	printHeader(stdout, order, countFKs(schema.Tables), opts)
 
 	start := time.Now()
@@ -184,6 +193,7 @@ func applyTableFilters(
 
 func buildInsertOptions(
 	rows int, truncate bool, seed int64, dryRun, verbose bool,
+	locale infer.Locale,
 	set map[string]bool, cfg config.Config,
 ) insert.Options {
 	defaultRows := rows
@@ -207,6 +217,7 @@ func buildInsertOptions(
 		Truncate:    effectiveTruncate,
 		DryRun:      dryRun,
 		Verbose:     verbose,
+		Locale:      locale,
 	}
 	switch {
 	case set["seed"]:
@@ -254,6 +265,7 @@ var valueFlags = map[string]bool{
 	"exclude": true,
 	"seed":    true,
 	"config":  true,
+	"locale":  true,
 }
 
 // configAt loads the config at path; an empty path auto-detects seeder.yaml in the CWD.
@@ -481,12 +493,14 @@ func PrintUsage(w io.Writer) {
 	fmt.Fprintln(w, "  seeder postgres://...  --tables users,orders --rows 5000")
 	fmt.Fprintln(w, "  seeder postgres://...  --exclude audit_log,migration_history")
 	fmt.Fprintln(w, "  seeder postgres://...  --truncate --seed 42")
+	fmt.Fprintln(w, "  seeder postgres://...  --locale ja --rows 500")
 	fmt.Fprintln(w, "  seeder postgres://...  --dry-run")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "FLAGS:")
 	fmt.Fprintln(w, "  --config <file>  Path to seeder.yaml (default: auto-detect ./seeder.yaml)")
 	fmt.Fprintln(w, "  --dry-run        Print plan, do not insert")
 	fmt.Fprintln(w, "  --exclude string Comma-separated tables to skip (cannot combine with --tables)")
+	fmt.Fprintln(w, "  --locale string  Locale for name-rule generators (en, ja; default: en)")
 	fmt.Fprintln(w, "  --rows int       Rows per table (default: 1000; overrides yaml when set)")
 	fmt.Fprintln(w, "  --seed N         Deterministic RNG seed (>= 0; default: time-based)")
 	fmt.Fprintln(w, "  --tables string  Comma-separated tables to include (default: all)")

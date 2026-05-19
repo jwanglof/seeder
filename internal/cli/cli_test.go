@@ -10,6 +10,7 @@ import (
 
 	"github.com/mickamy/seeder/internal/cli"
 	"github.com/mickamy/seeder/internal/config"
+	"github.com/mickamy/seeder/internal/infer"
 	"github.com/mickamy/seeder/internal/introspect"
 )
 
@@ -57,6 +58,11 @@ func TestReorderArgs(t *testing.T) {
 			name: "negative seed value",
 			in:   []string{"postgres://x", "--seed", "-42"},
 			want: []string{"--seed", "-42", "postgres://x"},
+		},
+		{
+			name: "locale flag with dsn first",
+			in:   []string{"postgres://x", "--locale", "ja"},
+			want: []string{"--locale", "ja", "postgres://x"},
 		},
 	}
 
@@ -309,7 +315,7 @@ func TestBuildInsertOptions_RowsPriority(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			opts := cli.BuildInsertOptions(tc.rows, false, 0, false, false, tc.set, cfg)
+			opts := cli.BuildInsertOptions(tc.rows, false, 0, false, false, infer.LocaleEN, tc.set, cfg)
 			if opts.Rows != tc.wantDefaultRows {
 				t.Errorf("Rows = %d; want %d", opts.Rows, tc.wantDefaultRows)
 			}
@@ -338,7 +344,7 @@ func TestBuildInsertOptions_SeedPriority(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			opts := cli.BuildInsertOptions(1, false, tc.seed, false, false, tc.set, cfg)
+			opts := cli.BuildInsertOptions(1, false, tc.seed, false, false, infer.LocaleEN, tc.set, cfg)
 			if opts.Seed == nil {
 				t.Fatal("Seed = nil; want non-nil")
 			}
@@ -394,7 +400,7 @@ func TestBuildInsertOptions_TruncatePriority(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			opts := cli.BuildInsertOptions(1, tc.cliTruncate, 0, false, false, tc.set, tc.cfg)
+			opts := cli.BuildInsertOptions(1, tc.cliTruncate, 0, false, false, infer.LocaleEN, tc.set, tc.cfg)
 			if opts.Truncate != tc.want {
 				t.Errorf("Truncate = %v; want %v", opts.Truncate, tc.want)
 			}
@@ -405,7 +411,7 @@ func TestBuildInsertOptions_TruncatePriority(t *testing.T) {
 func TestBuildInsertOptions_NoConfigNoSeed(t *testing.T) {
 	t.Parallel()
 
-	opts := cli.BuildInsertOptions(10, false, 0, false, false, map[string]bool{}, config.Config{})
+	opts := cli.BuildInsertOptions(10, false, 0, false, false, infer.LocaleEN, map[string]bool{}, config.Config{})
 	if opts.Seed != nil {
 		t.Errorf("Seed = %v; want nil (time-based)", opts.Seed)
 	}
@@ -485,6 +491,19 @@ func TestRun_ConfigErrors(t *testing.T) {
 				t.Errorf("stderr = %q; want substring %q", stderr.String(), tc.want)
 			}
 		})
+	}
+}
+
+func TestRun_UnknownLocale(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr strings.Builder
+	code := cli.Run([]string{"postgres://x", "--locale", "fr"}, &stdout, &stderr)
+	if code != 2 {
+		t.Errorf("exit code = %d; want 2 (Usage)", code)
+	}
+	if !strings.Contains(stderr.String(), "unknown locale") {
+		t.Errorf("stderr = %q; want unknown locale message", stderr.String())
 	}
 }
 

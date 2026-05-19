@@ -1,7 +1,8 @@
 package infer_test
 
 import (
-	"strings"
+	"regexp"
+	"slices"
 	"testing"
 	"time"
 
@@ -9,52 +10,57 @@ import (
 
 	"github.com/mickamy/seeder/internal/infer"
 	"github.com/mickamy/seeder/internal/introspect"
+	"github.com/mickamy/seeder/internal/matchers"
 )
 
 func TestPick_ByName(t *testing.T) {
 	t.Parallel()
 
+	atSign := matchers.Match(regexp.MustCompile(`@`))
+	httpURL := matchers.MatchPrefix("http")
+	nonEmpty := matchers.NonEmpty()
+
 	cases := []struct {
 		col   string
 		kind  introspect.Kind
-		check func(t *testing.T, v any)
+		check matchers.Matcher
 	}{
-		{"email", introspect.KindString, expectEmail},
-		{"user_email", introspect.KindString, expectEmail},
-		{"first_name", introspect.KindString, expectNonEmptyString},
-		{"last_name", introspect.KindString, expectNonEmptyString},
-		{"name", introspect.KindString, expectNonEmptyString},
-		{"display_name", introspect.KindString, expectNonEmptyString},
-		{"phone", introspect.KindString, expectNonEmptyString},
-		{"tel", introspect.KindString, expectNonEmptyString},
-		{"avatar_url", introspect.KindString, expectURL},
-		{"image_url", introspect.KindString, expectURL},
-		{"homepage", introspect.KindString, expectURL},
-		{"address", introspect.KindString, expectNonEmptyString},
-		{"city", introspect.KindString, expectNonEmptyString},
-		{"country", introspect.KindString, expectNonEmptyString},
-		{"zip", introspect.KindString, expectNonEmptyString},
-		{"description", introspect.KindString, expectNonEmptyString},
-		{"bio", introspect.KindString, expectNonEmptyString},
-		{"title", introspect.KindString, expectNonEmptyString},
-		{"subject", introspect.KindString, expectNonEmptyString},
-		{"created_at", introspect.KindTimestamp, expectTime},
-		{"updated_at", introspect.KindTimestamp, expectTime},
-		{"birthday", introspect.KindDate, expectTime},
-		{"age", introspect.KindInt, expectInt},
-		{"price", introspect.KindInt, expectInt},
-		{"amount", introspect.KindInt, expectInt},
-		{"quantity", introspect.KindInt, expectInt},
-		{"is_active", introspect.KindBool, expectBool},
-		{"has_subscription", introspect.KindBool, expectBool},
-		{"verified_flag", introspect.KindBool, expectBool},
+		{"email", introspect.KindString, atSign},
+		{"user_email", introspect.KindString, atSign},
+		{"first_name", introspect.KindString, nonEmpty},
+		{"last_name", introspect.KindString, nonEmpty},
+		{"name", introspect.KindString, nonEmpty},
+		{"display_name", introspect.KindString, nonEmpty},
+		{"phone", introspect.KindString, nonEmpty},
+		{"tel", introspect.KindString, nonEmpty},
+		{"avatar_url", introspect.KindString, httpURL},
+		{"image_url", introspect.KindString, httpURL},
+		{"homepage", introspect.KindString, httpURL},
+		{"address", introspect.KindString, nonEmpty},
+		{"city", introspect.KindString, nonEmpty},
+		{"country", introspect.KindString, nonEmpty},
+		{"zip", introspect.KindString, nonEmpty},
+		{"description", introspect.KindString, nonEmpty},
+		{"bio", introspect.KindString, nonEmpty},
+		{"title", introspect.KindString, nonEmpty},
+		{"subject", introspect.KindString, nonEmpty},
+		{"created_at", introspect.KindTimestamp, matchers.Type[time.Time]()},
+		{"updated_at", introspect.KindTimestamp, matchers.Type[time.Time]()},
+		{"birthday", introspect.KindDate, matchers.Type[time.Time]()},
+		{"age", introspect.KindInt, matchers.Type[int]()},
+		{"price", introspect.KindInt, matchers.Type[int]()},
+		{"amount", introspect.KindInt, matchers.Type[int]()},
+		{"quantity", introspect.KindInt, matchers.Type[int]()},
+		{"is_active", introspect.KindBool, matchers.Type[bool]()},
+		{"has_subscription", introspect.KindBool, matchers.Type[bool]()},
+		{"verified_flag", introspect.KindBool, matchers.Type[bool]()},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.col, func(t *testing.T) {
 			t.Parallel()
 			f := gofakeit.New(42)
-			gen := infer.Pick(f, introspect.Column{Name: tc.col, Kind: tc.kind}, nil)
+			gen := infer.Pick(f, introspect.Column{Name: tc.col, Kind: tc.kind}, nil, infer.LocaleEN)
 			tc.check(t, gen())
 		})
 	}
@@ -67,11 +73,8 @@ func TestPick_KindMismatchFallsBack(t *testing.T) {
 	// `age` matches the name rule but the column is text — the rule should be
 	// skipped and the generator should fall back to KindString.
 	col := introspect.Column{Name: "age", Kind: introspect.KindString}
-	gen := infer.Pick(f, col, nil)
-	v := gen()
-	if _, ok := v.(string); !ok {
-		t.Errorf("age text fallback = %T; want string", v)
-	}
+	gen := infer.Pick(f, col, nil, infer.LocaleEN)
+	matchers.Type[string]()(t, gen())
 }
 
 func TestPick_FallsBackToKind(t *testing.T) {
@@ -83,11 +86,8 @@ func TestPick_FallsBackToKind(t *testing.T) {
 		DataType: "integer",
 		Kind:     introspect.KindInt,
 	}
-	gen := infer.Pick(f, col, nil)
-	v := gen()
-	if _, ok := v.(int); !ok {
-		t.Errorf("fallback for KindInt = %T; want int", v)
-	}
+	gen := infer.Pick(f, col, nil, infer.LocaleEN)
+	matchers.Type[int]()(t, gen())
 }
 
 func TestPick_EnumByKind(t *testing.T) {
@@ -101,59 +101,61 @@ func TestPick_EnumByKind(t *testing.T) {
 		UDTName:  "order_status",
 		Kind:     introspect.KindEnum,
 	}
-	gen := infer.Pick(f, col, enums)
-	v := gen()
-	s, ok := v.(string)
-	if !ok {
-		t.Fatalf("enum value type = %T; want string", v)
+	gen := infer.Pick(f, col, enums, infer.LocaleEN)
+	matchers.Member([]string{"pending", "paid", "shipped"})(t, gen())
+}
+
+func TestPick_LocaleJA(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		col   string
+		check matchers.Matcher
+	}{
+		{"first_name", expectKana},
+		{"last_name", expectKana},
+		{"full_name", expectKana},
+		{"display_name", expectKana},
+		{"phone", matchers.MatchPrefix("0")},
+		{"address", expectKana},
+		{"city", expectKana},
+		{"prefecture", expectKana},
+		{"country", matchers.Equal("日本")},
+		{"state", expectKana},
+		{"zip", matchers.Match(regexp.MustCompile(`^\d{3}-\d{4}$`))},
 	}
-	if s != "pending" && s != "paid" && s != "shipped" {
-		t.Errorf("got %q; not in enum", s)
+
+	for _, tc := range cases {
+		t.Run(tc.col, func(t *testing.T) {
+			t.Parallel()
+			f := gofakeit.New(42)
+			gen := infer.Pick(f, introspect.Column{Name: tc.col, Kind: introspect.KindString}, nil, infer.LocaleJA)
+			tc.check(t, gen())
+		})
 	}
 }
 
-func expectEmail(t *testing.T, v any) {
-	t.Helper()
-	s, ok := v.(string)
-	if !ok || !strings.Contains(s, "@") {
-		t.Errorf("got %v (%T); want email-like string", v, v)
-	}
-}
+func TestPick_LocaleJA_KeepsLocaleNeutralRules(t *testing.T) {
+	t.Parallel()
 
-func expectURL(t *testing.T, v any) {
-	t.Helper()
-	s, ok := v.(string)
-	if !ok || (!strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://")) {
-		t.Errorf("got %v (%T); want URL-like string", v, v)
+	// email / url / age etc must keep returning the en (locale-neutral) value
+	// even under LocaleJA, since the rule has no ja override.
+	f := gofakeit.New(42)
+	cases := []struct {
+		col   string
+		kind  introspect.Kind
+		check matchers.Matcher
+	}{
+		{"email", introspect.KindString, matchers.Match(regexp.MustCompile(`@`))},
+		{"avatar_url", introspect.KindString, matchers.MatchPrefix("http")},
+		{"age", introspect.KindInt, matchers.Type[int]()},
 	}
-}
-
-func expectNonEmptyString(t *testing.T, v any) {
-	t.Helper()
-	s, ok := v.(string)
-	if !ok || s == "" {
-		t.Errorf("got %v (%T); want non-empty string", v, v)
-	}
-}
-
-func expectTime(t *testing.T, v any) {
-	t.Helper()
-	if _, ok := v.(time.Time); !ok {
-		t.Errorf("got %T; want time.Time", v)
-	}
-}
-
-func expectInt(t *testing.T, v any) {
-	t.Helper()
-	if _, ok := v.(int); !ok {
-		t.Errorf("got %T; want int", v)
-	}
-}
-
-func expectBool(t *testing.T, v any) {
-	t.Helper()
-	if _, ok := v.(bool); !ok {
-		t.Errorf("got %T; want bool", v)
+	for _, tc := range cases {
+		t.Run(tc.col, func(t *testing.T) {
+			t.Parallel()
+			gen := infer.Pick(f, introspect.Column{Name: tc.col, Kind: tc.kind}, nil, infer.LocaleJA)
+			tc.check(t, gen())
+		})
 	}
 }
 
@@ -201,4 +203,29 @@ func TestExplain(t *testing.T) {
 			}
 		})
 	}
+}
+
+// expectKana asserts the value contains at least one CJK/kana code point, so
+// we can distinguish ja-locale output from a stray English fallback.
+func expectKana(t *testing.T, v any) {
+	t.Helper()
+	s, ok := v.(string)
+	if !ok || s == "" {
+		t.Fatalf("got %v (%T); want non-empty string", v, v)
+	}
+	if !slices.ContainsFunc([]rune(s), isJapaneseRune) {
+		t.Errorf("got %q; want at least one CJK/kana rune", s)
+	}
+}
+
+func isJapaneseRune(r rune) bool {
+	switch {
+	case r >= 0x3040 && r <= 0x309F: // Hiragana
+		return true
+	case r >= 0x30A0 && r <= 0x30FF: // Katakana
+		return true
+	case r >= 0x4E00 && r <= 0x9FFF: // CJK Unified Ideographs
+		return true
+	}
+	return false
 }
