@@ -17,7 +17,7 @@ import (
 )
 
 var errNoWritableColumns = errors.New(
-	"no writable columns (all columns are identity or int-with-default); cannot seed in V0.1",
+	"no writable columns (all columns are identity or int-with-default); cannot seed in v0.1.0",
 )
 
 type Options struct {
@@ -158,7 +158,7 @@ func planColumns(t introspect.Table, faker *gofakeit.Faker, enums map[string][]s
 // default is `nextval(...)`; we conservatively skip any int with a default
 // (e.g., a `DEFAULT 0` counter) rather than parse the raw default expression.
 // Parsing the expression so only true `nextval(...)` columns are skipped is
-// planned for V0.2.
+// planned for v0.2.0.
 func hasIntDefault(kind introspect.Kind) bool {
 	return kind == introspect.KindInt
 }
