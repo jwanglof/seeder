@@ -1,4 +1,5 @@
-# seeder.yaml — example configuration.
+# seeder.yaml — example configuration tailored for the dogfood schema
+# (`compose/init/postgres/schema.sql`: users, orders, comments).
 #
 # Auto-detected when present in the working directory, or pass
 # --config <file> to point at one explicitly.
@@ -24,14 +25,16 @@ locale: en
 # Per-table overrides.
 tables:
   users:
-    rows: 10000
+    rows: 5000
     # Per-column overrides. Use `generator` to force a built-in (see
-    # `seeder --help` for the list) or `value` to pin a literal. Set
-    # exactly one of the two per column.
+    # `seeder --help` for the list via the preflight error) or `value` to
+    # pin a literal. Set exactly one of the two per column.
     columns:
       email:
         generator: Email
-      country:
-        value: JP
-  audit_log:
+      bio:
+        value: dogfood seed row
+  orders:
+    rows: 10000
+  comments:
     exclude: true

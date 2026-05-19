@@ -121,13 +121,15 @@ locale: en
 truncate: false
 tables:
   users:
-    rows: 10000
+    rows: 5000
     columns:
       email:
         generator: Email
-      country:
-        value: JP
-  audit_log:
+      bio:
+        value: dogfood seed row
+  orders:
+    rows: 10000
+  comments:
     exclude: true
 ```
 
