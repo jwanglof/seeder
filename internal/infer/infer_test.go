@@ -15,47 +15,62 @@ func TestPick_ByName(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		col      string
-		dataType string
-		check    func(t *testing.T, v any)
+		col   string
+		kind  introspect.Kind
+		check func(t *testing.T, v any)
 	}{
-		{"email", "text", expectEmail},
-		{"user_email", "text", expectEmail},
-		{"first_name", "text", expectNonEmptyString},
-		{"last_name", "text", expectNonEmptyString},
-		{"name", "text", expectNonEmptyString},
-		{"display_name", "text", expectNonEmptyString},
-		{"phone", "text", expectNonEmptyString},
-		{"tel", "text", expectNonEmptyString},
-		{"avatar_url", "text", expectURL},
-		{"image_url", "text", expectURL},
-		{"homepage", "text", expectURL},
-		{"address", "text", expectNonEmptyString},
-		{"city", "text", expectNonEmptyString},
-		{"country", "text", expectNonEmptyString},
-		{"zip", "text", expectNonEmptyString},
-		{"description", "text", expectNonEmptyString},
-		{"bio", "text", expectNonEmptyString},
-		{"title", "text", expectNonEmptyString},
-		{"subject", "text", expectNonEmptyString},
-		{"created_at", "timestamp", expectTime},
-		{"updated_at", "timestamp", expectTime},
-		{"birthday", "date", expectTime},
-		{"price", "integer", expectInt},
-		{"amount", "integer", expectInt},
-		{"quantity", "integer", expectInt},
-		{"is_active", "boolean", expectBool},
-		{"has_subscription", "boolean", expectBool},
-		{"verified_flag", "boolean", expectBool},
+		{"email", introspect.KindString, expectEmail},
+		{"user_email", introspect.KindString, expectEmail},
+		{"first_name", introspect.KindString, expectNonEmptyString},
+		{"last_name", introspect.KindString, expectNonEmptyString},
+		{"name", introspect.KindString, expectNonEmptyString},
+		{"display_name", introspect.KindString, expectNonEmptyString},
+		{"phone", introspect.KindString, expectNonEmptyString},
+		{"tel", introspect.KindString, expectNonEmptyString},
+		{"avatar_url", introspect.KindString, expectURL},
+		{"image_url", introspect.KindString, expectURL},
+		{"homepage", introspect.KindString, expectURL},
+		{"address", introspect.KindString, expectNonEmptyString},
+		{"city", introspect.KindString, expectNonEmptyString},
+		{"country", introspect.KindString, expectNonEmptyString},
+		{"zip", introspect.KindString, expectNonEmptyString},
+		{"description", introspect.KindString, expectNonEmptyString},
+		{"bio", introspect.KindString, expectNonEmptyString},
+		{"title", introspect.KindString, expectNonEmptyString},
+		{"subject", introspect.KindString, expectNonEmptyString},
+		{"created_at", introspect.KindTimestamp, expectTime},
+		{"updated_at", introspect.KindTimestamp, expectTime},
+		{"birthday", introspect.KindDate, expectTime},
+		{"age", introspect.KindInt, expectInt},
+		{"price", introspect.KindInt, expectInt},
+		{"amount", introspect.KindInt, expectInt},
+		{"quantity", introspect.KindInt, expectInt},
+		{"is_active", introspect.KindBool, expectBool},
+		{"has_subscription", introspect.KindBool, expectBool},
+		{"verified_flag", introspect.KindBool, expectBool},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.col, func(t *testing.T) {
 			t.Parallel()
 			f := gofakeit.New(42)
-			gen := infer.Pick(f, introspect.Column{Name: tc.col, DataType: tc.dataType}, nil)
+			gen := infer.Pick(f, introspect.Column{Name: tc.col, Kind: tc.kind}, nil)
 			tc.check(t, gen())
 		})
+	}
+}
+
+func TestPick_KindMismatchFallsBack(t *testing.T) {
+	t.Parallel()
+
+	f := gofakeit.New(42)
+	// `age` matches the name rule but the column is text — the rule should be
+	// skipped and the generator should fall back to KindString.
+	col := introspect.Column{Name: "age", Kind: introspect.KindString}
+	gen := infer.Pick(f, col, nil)
+	v := gen()
+	if _, ok := v.(string); !ok {
+		t.Errorf("age text fallback = %T; want string", v)
 	}
 }
 
