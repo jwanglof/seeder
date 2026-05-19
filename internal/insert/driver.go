@@ -25,6 +25,6 @@ func openDriver(ctx context.Context, dataSourceName string) (Driver, error) {
 	default:
 		scheme := dsn.Scheme(dataSourceName)
 
-		return nil, fmt.Errorf("unsupported DSN scheme %q (supported: mysql, postgres)", scheme)
+		return nil, fmt.Errorf("unsupported DSN scheme %q (supported: mysql, postgres, postgresql)", scheme)
 	}
 }
