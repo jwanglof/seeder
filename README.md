@@ -148,6 +148,12 @@ random past timestamp, not `now()`; `status text DEFAULT 'active'` ends up
 with a fake word, not `'active'`. If you need the DB default for one of
 these columns, exclude the table or accept the override.
 
+> **Note on `json` / `jsonb` columns**: V0.1 emits randomly-structured
+> placeholder JSON via `gofakeit.JSON(nil)`. Each value can be a multi-KB
+> nested array/object, so seeding thousands of rows of `jsonb` is heavy on
+> memory and bulk-insert throughput. `--exclude` the table or expect a
+> slower run; per-column overrides are planned for V0.2.
+
 ### Foreign keys
 
 Tables are inserted in dependency order: parents first, then children pick
