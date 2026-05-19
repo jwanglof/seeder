@@ -24,8 +24,11 @@ type Column struct {
 	EnumValues []string
 	Kind       Kind
 	Nullable   bool
-	HasDefault bool
+	// Default is the raw column_default expression; empty when there is none.
+	Default    string
 	IsIdentity bool
+	// IsUnique is set only for single-column UNIQUE constraints.
+	IsUnique bool
 }
 
 type ForeignKey struct {
