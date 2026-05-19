@@ -140,7 +140,6 @@ func TestPick_LocaleJA_KeepsLocaleNeutralRules(t *testing.T) {
 
 	// email / url / age etc must keep returning the en (locale-neutral) value
 	// even under LocaleJA, since the rule has no ja override.
-	f := gofakeit.New(42)
 	cases := []struct {
 		col   string
 		kind  introspect.Kind
@@ -153,6 +152,7 @@ func TestPick_LocaleJA_KeepsLocaleNeutralRules(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.col, func(t *testing.T) {
 			t.Parallel()
+			f := gofakeit.New(42)
 			gen := infer.Pick(f, introspect.Column{Name: tc.col, Kind: tc.kind}, nil, infer.LocaleJA)
 			tc.check(t, gen())
 		})
