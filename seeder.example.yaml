@@ -26,9 +26,9 @@ locale: en
 tables:
   users:
     rows: 5000
-    # Per-column overrides. Use `generator` to force a built-in (see
-    # `seeder --help` for the list via the preflight error) or `value` to
-    # pin a literal. Set exactly one of the two per column.
+    # Per-column overrides. Use `generator` to force a built-in (supplying
+    # an unknown name surfaces the full known list in the preflight error)
+    # or `value` to pin a literal. Set exactly one of the two per column.
     columns:
       email:
         generator: Email
