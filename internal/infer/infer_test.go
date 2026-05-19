@@ -3,6 +3,7 @@ package infer_test
 import (
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ func TestPick_ByName(t *testing.T) {
 
 	atSign := matchers.Match(regexp.MustCompile(`@`))
 	httpURL := matchers.MatchPrefix("http")
+	picsumURL := matchers.MatchPrefix("https://picsum.photos/")
 	nonEmpty := matchers.NonEmpty()
 
 	cases := []struct {
@@ -33,8 +35,8 @@ func TestPick_ByName(t *testing.T) {
 		{"display_name", introspect.KindString, nonEmpty},
 		{"phone", introspect.KindString, nonEmpty},
 		{"tel", introspect.KindString, nonEmpty},
-		{"avatar_url", introspect.KindString, httpURL},
-		{"image_url", introspect.KindString, httpURL},
+		{"avatar_url", introspect.KindString, picsumURL},
+		{"image_url", introspect.KindString, picsumURL},
 		{"homepage", introspect.KindString, httpURL},
 		{"address", introspect.KindString, nonEmpty},
 		{"city", introspect.KindString, nonEmpty},
@@ -88,6 +90,54 @@ func TestPick_FallsBackToKind(t *testing.T) {
 	}
 	gen := infer.Pick(f, col, infer.LocaleEN)
 	matchers.Type[int]()(t, gen())
+}
+
+func TestPick_UniqueEmail(t *testing.T) {
+	t.Parallel()
+
+	f := gofakeit.New(42)
+	col := introspect.Column{Name: "email", Kind: introspect.KindString, IsUnique: true}
+	gen := infer.Pick(f, col, infer.LocaleEN)
+
+	seen := make(map[string]bool, 1000)
+	for range 1000 {
+		v := gen()
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("unique email value = %T; want string", v)
+		}
+		if !strings.HasSuffix(s, "@example.com") {
+			t.Errorf("unique email %q does not end with @example.com", s)
+		}
+		if seen[s] {
+			t.Fatalf("unique email collided after few samples: %s", s)
+		}
+		seen[s] = true
+	}
+}
+
+func TestPick_UniqueString(t *testing.T) {
+	t.Parallel()
+
+	f := gofakeit.New(42)
+	col := introspect.Column{Name: "title", Kind: introspect.KindString, IsUnique: true}
+	gen := infer.Pick(f, col, infer.LocaleEN)
+
+	seen := make(map[string]bool, 1000)
+	for range 1000 {
+		v := gen()
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("unique string value = %T; want string", v)
+		}
+		if !strings.Contains(s, "-") {
+			t.Errorf("unique string %q has no UUID suffix", s)
+		}
+		if seen[s] {
+			t.Fatalf("unique string collided after few samples: %s", s)
+		}
+		seen[s] = true
+	}
 }
 
 func TestPick_EnumByKind(t *testing.T) {
@@ -146,7 +196,7 @@ func TestPick_LocaleJA_KeepsLocaleNeutralRules(t *testing.T) {
 		check matchers.Matcher
 	}{
 		{"email", introspect.KindString, matchers.Match(regexp.MustCompile(`@`))},
-		{"avatar_url", introspect.KindString, matchers.MatchPrefix("http")},
+		{"avatar_url", introspect.KindString, matchers.MatchPrefix("https://picsum.photos/")},
 		{"age", introspect.KindInt, matchers.Type[int]()},
 	}
 	for _, tc := range cases {
@@ -191,6 +241,11 @@ func TestExplain(t *testing.T) {
 			name: "unknown column falls back to kind",
 			col:  introspect.Column{Name: "totally_unknown_xyz", Kind: introspect.KindInt},
 			want: "kind: int",
+		},
+		{
+			name: "unique-aware name match",
+			col:  introspect.Column{Name: "email", Kind: introspect.KindString, IsUnique: true},
+			want: "unique-aware name match: Email",
 		},
 	}
 	for _, tc := range cases {

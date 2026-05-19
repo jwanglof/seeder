@@ -1,6 +1,8 @@
 package infer
 
 import (
+	"fmt"
+	"math"
 	"regexp"
 	"slices"
 	"strings"
@@ -12,6 +14,9 @@ import (
 )
 
 type localeGen func(*gofakeit.Faker) any
+
+// Shared with uniqueWrap so the email shape stays valid under UNIQUE.
+var emailNameRe = regexp.MustCompile(`(^|_)email(s)?$`)
 
 type nameRule struct {
 	label string
@@ -40,7 +45,7 @@ var (
 var nameRules = []nameRule{
 	{
 		label: "Email",
-		re:    regexp.MustCompile(`(^|_)email(s)?$`),
+		re:    emailNameRe,
 		kinds: stringKinds,
 		gens: map[Locale]localeGen{
 			LocaleEN: func(f *gofakeit.Faker) any { return f.Email() },
@@ -83,8 +88,18 @@ var nameRules = []nameRule{
 		},
 	},
 	{
+		label: "Image",
+		re:    regexp.MustCompile(`^avatar(_url)?$|^image(_url)?$|^photo(_url)?$|^picture(_url)?$|^thumbnail(_url)?$`),
+		kinds: stringKinds,
+		gens: map[Locale]localeGen{
+			LocaleEN: func(f *gofakeit.Faker) any {
+				return fmt.Sprintf("https://picsum.photos/seed/%d/200/200", f.Number(1, 1_000_000))
+			},
+		},
+	},
+	{
 		label: "URL",
-		re:    regexp.MustCompile(`(^|_)url$|^link$|^homepage$|^website$|^avatar(_url)?$|^image(_url)?$`),
+		re:    regexp.MustCompile(`(^|_)url$|^link$|^homepage$|^website$`),
 		kinds: stringKinds,
 		gens: map[Locale]localeGen{
 			LocaleEN: func(f *gofakeit.Faker) any { return f.URL() },
@@ -202,6 +217,15 @@ var nameRules = []nameRule{
 }
 
 func Pick(f *gofakeit.Faker, col introspect.Column, locale Locale) generator.Func {
+	base := pickBase(f, col, locale)
+	if !col.IsUnique {
+		return base
+	}
+
+	return uniqueWrap(f, col, base)
+}
+
+func pickBase(f *gofakeit.Faker, col introspect.Column, locale Locale) generator.Func {
 	if r, ok := matchRule(col); ok {
 		gen := r.gen(locale)
 
@@ -211,16 +235,56 @@ func Pick(f *gofakeit.Faker, col introspect.Column, locale Locale) generator.Fun
 	return generator.FromKind(f, col.Kind, col.EnumValues)
 }
 
-// Explain reports which rule Pick will use for col; meant for --verbose output.
-func Explain(col introspect.Column) string {
-	if r, ok := matchRule(col); ok {
-		return "name match: " + r.label
-	}
-	if col.Kind == introspect.KindEnum && len(col.EnumValues) > 0 {
-		return "enum: " + strings.Join(col.EnumValues, ",")
+// uniqueWrap is best-effort: large row counts can still collide and surface as
+// a unique-violation from the DB.
+func uniqueWrap(f *gofakeit.Faker, col introspect.Column, base generator.Func) generator.Func {
+	name := strings.ToLower(col.Name)
+	switch col.Kind {
+	case introspect.KindString:
+		if emailNameRe.MatchString(name) {
+			return func() any { return f.UUID() + "@example.com" }
+		}
+
+		return func() any {
+			v, ok := base().(string)
+			if !ok {
+				return f.UUID()
+			}
+
+			return v + "-" + f.UUID()
+		}
+	case introspect.KindInt:
+		return func() any { return f.Number(1, math.MaxInt32) }
+	case introspect.KindUnknown,
+		introspect.KindBool,
+		introspect.KindFloat,
+		introspect.KindUUID,
+		introspect.KindDate,
+		introspect.KindTime,
+		introspect.KindTimestamp,
+		introspect.KindJSON,
+		introspect.KindEnum,
+		introspect.KindBytes:
+		return base
 	}
 
-	return "kind: " + col.Kind.String()
+	return base
+}
+
+// Explain reports which rule Pick will use for col; meant for --verbose output.
+func Explain(col introspect.Column) string {
+	prefix := ""
+	if col.IsUnique {
+		prefix = "unique-aware "
+	}
+	if r, ok := matchRule(col); ok {
+		return prefix + "name match: " + r.label
+	}
+	if col.Kind == introspect.KindEnum && len(col.EnumValues) > 0 {
+		return prefix + "enum: " + strings.Join(col.EnumValues, ",")
+	}
+
+	return prefix + "kind: " + col.Kind.String()
 }
 
 func matchRule(col introspect.Column) (nameRule, bool) {
