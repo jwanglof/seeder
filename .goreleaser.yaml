@@ -1,0 +1,38 @@
+version: 2
+
+release:
+  mode: replace
+
+builds:
+  - id: seeder
+    main: .
+    binary: seeder
+    ldflags:
+      - -X main.version={{.Version}}
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - ids:
+      - seeder
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+brews:
+  - name: seeder
+    homepage: https://github.com/mickamy/seeder
+    description: Populate your database with realistic fake data, one command.
+    install: |
+      bin.install "seeder"
+    repository:
+      owner: mickamy
+      name: homebrew-tap
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+
+changelog:
+  sort: asc
