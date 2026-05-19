@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -83,6 +84,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "seeder: introspect: %v\n", err)
 
 		return exit.Error
+	}
+
+	if unknown := unknownConfigTables(cfg, schema); len(unknown) > 0 {
+		fmt.Fprintf(stderr, "seeder: seeder.yaml references unknown table(s): %s\n", strings.Join(unknown, ", "))
+
+		return exit.Usage
 	}
 
 	schema, missing := applyTableFilters(schema, *tablesArg, *excludeArg, cfg)
@@ -289,6 +296,25 @@ func yamlExcludeList(cfg config.Config) []string {
 			out = append(out, name)
 		}
 	}
+
+	return out
+}
+
+func unknownConfigTables(cfg config.Config, schema introspect.Schema) []string {
+	if len(cfg.Tables) == 0 {
+		return nil
+	}
+	known := make(map[string]bool, len(schema.Tables))
+	for _, t := range schema.Tables {
+		known[t.Name] = true
+	}
+	var out []string
+	for name := range cfg.Tables {
+		if !known[name] {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
 
 	return out
 }

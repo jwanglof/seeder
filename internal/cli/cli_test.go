@@ -361,6 +361,48 @@ func TestBuildInsertOptions_NoConfigNoSeed(t *testing.T) {
 	}
 }
 
+func TestUnknownConfigTables(t *testing.T) {
+	t.Parallel()
+
+	five := 5
+	cfg := config.Config{
+		Version: 1,
+		Tables: map[string]config.TableConfig{
+			"users":    {Rows: &five},
+			"usres":    {Rows: &five},   // typo
+			"audit_lg": {Exclude: true}, // typo
+		},
+	}
+	schema := introspect.Schema{Tables: []introspect.Table{
+		{Name: "users"}, {Name: "orders"}, {Name: "audit_log"},
+	}}
+
+	got := cli.UnknownConfigTables(cfg, schema)
+	want := []string{"audit_lg", "usres"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("UnknownConfigTables = %v; want %v", got, want)
+	}
+}
+
+func TestUnknownConfigTables_AllKnown(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Config{
+		Version: 1,
+		Tables: map[string]config.TableConfig{
+			"users":  {Exclude: true},
+			"orders": {Exclude: true},
+		},
+	}
+	schema := introspect.Schema{Tables: []introspect.Table{
+		{Name: "users"}, {Name: "orders"},
+	}}
+
+	if got := cli.UnknownConfigTables(cfg, schema); got != nil {
+		t.Errorf("UnknownConfigTables = %v; want nil", got)
+	}
+}
+
 func TestRun_ConfigErrors(t *testing.T) {
 	t.Parallel()
 
