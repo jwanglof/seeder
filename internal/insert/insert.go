@@ -310,7 +310,8 @@ func explainColumn(t introspect.Table, c introspect.Column, ov ColumnOverride) s
 	if c.IsIdentity {
 		return "skip: identity"
 	}
-	if c.HasDefault && hasIntDefault(c.Kind) {
+	hasOverride := ov.Generator != "" || ov.Value != nil
+	if !hasOverride && c.HasDefault && hasIntDefault(c.Kind) {
 		return "skip: int with default"
 	}
 	if fk, ok := findFK(t, c.Name); ok {
