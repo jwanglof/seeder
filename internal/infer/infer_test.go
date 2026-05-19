@@ -156,3 +156,49 @@ func expectBool(t *testing.T, v any) {
 		t.Errorf("got %T; want bool", v)
 	}
 }
+
+func TestExplain(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		col   introspect.Column
+		enums map[string][]string
+		want  string
+	}{
+		{
+			name: "name match",
+			col:  introspect.Column{Name: "email", Kind: introspect.KindString},
+			want: "name match: Email",
+		},
+		{
+			name: "kind mismatch falls back to kind",
+			col:  introspect.Column{Name: "age", Kind: introspect.KindString},
+			want: "kind: string",
+		},
+		{
+			name:  "enum with known UDT",
+			col:   introspect.Column{Name: "status", Kind: introspect.KindEnum, UDTName: "order_status"},
+			enums: map[string][]string{"order_status": {"a", "b"}},
+			want:  "enum: order_status",
+		},
+		{
+			name: "enum without known UDT falls back to kind",
+			col:  introspect.Column{Name: "status", Kind: introspect.KindEnum},
+			want: "kind: enum",
+		},
+		{
+			name: "unknown column falls back to kind",
+			col:  introspect.Column{Name: "totally_unknown_xyz", Kind: introspect.KindInt},
+			want: "kind: int",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := infer.Explain(tc.col, tc.enums); got != tc.want {
+				t.Errorf("Explain = %q; want %q", got, tc.want)
+			}
+		})
+	}
+}

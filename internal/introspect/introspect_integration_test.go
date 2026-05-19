@@ -162,26 +162,26 @@ func TestIntrospect(t *testing.T) {
 	}
 }
 
-func findTable(t *testing.T, schema *introspect.Schema, name string) *introspect.Table {
+func findTable(t *testing.T, schema introspect.Schema, name string) introspect.Table {
 	t.Helper()
-	for i := range schema.Tables {
-		if schema.Tables[i].Name == name {
-			return &schema.Tables[i]
+	for _, tbl := range schema.Tables {
+		if tbl.Name == name {
+			return tbl
 		}
 	}
 	t.Fatalf("table not found: %s", name)
 
-	return nil
+	return introspect.Table{}
 }
 
-func findColumn(t *testing.T, table *introspect.Table, name string) *introspect.Column {
+func findColumn(t *testing.T, table introspect.Table, name string) introspect.Column {
 	t.Helper()
-	for i := range table.Columns {
-		if table.Columns[i].Name == name {
-			return &table.Columns[i]
+	for _, c := range table.Columns {
+		if c.Name == name {
+			return c
 		}
 	}
 	t.Fatalf("column %s.%s not found", table.Name, name)
 
-	return nil
+	return introspect.Column{}
 }

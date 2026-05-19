@@ -58,3 +58,34 @@ const (
 	KindEnum
 	KindBytes
 )
+
+func (k Kind) String() string {
+	switch k {
+	case KindBool:
+		return "bool"
+	case KindInt:
+		return "int"
+	case KindFloat:
+		return "float"
+	case KindString:
+		return "string"
+	case KindUUID:
+		return "uuid"
+	case KindDate:
+		return "date"
+	case KindTime:
+		return "time"
+	case KindTimestamp:
+		return "timestamp"
+	case KindJSON:
+		return "json"
+	case KindEnum:
+		return "enum"
+	case KindBytes:
+		return "bytes"
+	case KindUnknown:
+		return "unknown"
+	}
+
+	return "unknown"
+}

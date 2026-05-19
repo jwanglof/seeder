@@ -6,9 +6,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/mickamy/seeder/internal/config"
 	"github.com/mickamy/seeder/internal/exit"
 	"github.com/mickamy/seeder/internal/insert"
 	"github.com/mickamy/seeder/internal/introspect"
@@ -28,12 +31,14 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	fs.Usage = func() { PrintUsage(stderr) }
 
-	rows := fs.Int("rows", 1000, "rows per table")
-	tablesArg := fs.String("tables", "", "comma-separated tables to include (default: all)")
-	excludeArg := fs.String("exclude", "", "comma-separated tables to skip (mutually exclusive with --tables)")
-	truncate := fs.Bool("truncate", false, "TRUNCATE before insert")
-	seed := fs.Int64("seed", 0, "deterministic RNG seed (default: time-based when omitted)")
+	configPath := fs.String("config", "", "path to seeder.yaml (default: auto-detect in CWD)")
 	dryRun := fs.Bool("dry-run", false, "print plan, do not insert")
+	excludeArg := fs.String("exclude", "", "comma-separated tables to skip (mutually exclusive with --tables)")
+	rows := fs.Int("rows", 1000, "rows per table")
+	seed := fs.Int64("seed", 0, "deterministic RNG seed (default: time-based when omitted)")
+	tablesArg := fs.String("tables", "", "comma-separated tables to include (default: all)")
+	truncate := fs.Bool("truncate", false, "TRUNCATE before insert")
+	verbose := fs.Bool("verbose", false, "print per-column inference decisions")
 
 	reordered, err := reorderArgs(args, valueFlags)
 	if err != nil {
@@ -51,29 +56,23 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if fs.NArg() == 0 {
-		fmt.Fprintln(stderr, "seeder: missing <dsn>")
-		fmt.Fprintln(stderr, "Usage: seeder <dsn> [flags]")
-		fmt.Fprintln(stderr, "Try:   seeder postgres://user:pass@localhost:5432/mydb")
-		fmt.Fprintln(stderr, "Run 'seeder --help' for more info.")
+		printMissingDSN(stderr)
 
 		return exit.Usage
 	}
 	dsn := fs.Arg(0)
 
-	if *rows < 0 {
-		fmt.Fprintf(stderr, "seeder: --rows must be >= 0, got %d\n", *rows)
+	if msg := validateFlags(*rows, *seed, *tablesArg, *excludeArg); msg != "" {
+		fmt.Fprintln(stderr, "seeder: "+msg)
 
 		return exit.Usage
 	}
 
-	if *seed < 0 {
-		fmt.Fprintf(stderr, "seeder: --seed must be >= 0, got %d\n", *seed)
+	set := flagSet(fs)
 
-		return exit.Usage
-	}
-
-	if *tablesArg != "" && *excludeArg != "" {
-		fmt.Fprintln(stderr, "seeder: --tables and --exclude are mutually exclusive")
+	cfg, err := configAt(*configPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "seeder: %v\n", err)
 
 		return exit.Usage
 	}
@@ -87,23 +86,17 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return exit.Error
 	}
 
-	switch {
-	case *tablesArg != "":
-		filtered, missing := includeTables(schema.Tables, splitTrim(*tablesArg))
-		if len(missing) > 0 {
-			fmt.Fprintf(stderr, "seeder: table not found: %s\n", strings.Join(missing, ", "))
+	if unknown := unknownConfigTables(cfg, schema); len(unknown) > 0 {
+		fmt.Fprintf(stderr, "seeder: seeder.yaml references unknown table(s): %s\n", strings.Join(unknown, ", "))
 
-			return exit.Usage
-		}
-		schema.Tables = filtered
-	case *excludeArg != "":
-		filtered, missing := excludeTables(schema.Tables, splitTrim(*excludeArg))
-		if len(missing) > 0 {
-			fmt.Fprintf(stderr, "seeder: table not found: %s\n", strings.Join(missing, ", "))
+		return exit.Usage
+	}
 
-			return exit.Usage
-		}
-		schema.Tables = filtered
+	schema, missing := applyTableFilters(schema, *tablesArg, *excludeArg, cfg)
+	if len(missing) > 0 {
+		fmt.Fprintf(stderr, "seeder: table not found: %s\n", strings.Join(missing, ", "))
+
+		return exit.Usage
 	}
 
 	if len(schema.Tables) == 0 {
@@ -112,12 +105,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return exit.Usage
 	}
 
-	if missing := orphanFKs(schema.Tables); len(missing) > 0 {
-		fmt.Fprintf(stderr, "seeder: filtered tables have NOT NULL FK(s) to dropped tables:\n")
-		for _, m := range missing {
-			fmt.Fprintf(stderr, "  %s.%s -> %s.%s\n", m.FromTable, m.FromCol, m.ToTable, m.ToCol)
-		}
-		fmt.Fprintln(stderr, "Either include those parent tables or remove the filter.")
+	if orphans := orphanFKs(schema.Tables); len(orphans) > 0 {
+		printOrphanFKs(stderr, orphans)
 
 		return exit.Usage
 	}
@@ -129,29 +118,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return exit.Error
 	}
 
-	fkCount := countFKs(schema.Tables)
-	fmt.Fprintf(stdout, "seeder: %d table(s), %d FK(s)\n", len(order), fkCount)
-	fmt.Fprintf(stdout, "order:  %s\n", strings.Join(order, " -> "))
-	switch {
-	case *dryRun:
-		fmt.Fprintln(stdout, "mode:   dry-run (no INSERT)")
-	case *truncate:
-		fmt.Fprintln(stdout, "mode:   truncate + insert")
-	default:
-		fmt.Fprintln(stdout, "mode:   append")
-	}
-
-	opts := insert.Options{
-		Rows:     *rows,
-		Truncate: *truncate,
-		DryRun:   *dryRun,
-	}
-	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "seed" {
-			s := uint64(*seed) //nolint:gosec // *seed is validated >= 0 earlier
-			opts.Seed = &s
-		}
-	})
+	opts := buildInsertOptions(*rows, *truncate, *seed, *dryRun, *verbose, set, cfg)
+	printHeader(stdout, order, countFKs(schema.Tables), opts)
 
 	start := time.Now()
 	stats, err := insert.Run(ctx, dsn, schema, order, opts, stdout)
@@ -171,11 +139,184 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	return exit.OK
 }
 
+func flagSet(fs *flag.FlagSet) map[string]bool {
+	out := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) { out[f.Name] = true })
+
+	return out
+}
+
+func validateFlags(rows int, seed int64, tablesArg, excludeArg string) string {
+	switch {
+	case rows < 0:
+		return fmt.Sprintf("--rows must be >= 0, got %d", rows)
+	case seed < 0:
+		return fmt.Sprintf("--seed must be >= 0, got %d", seed)
+	case tablesArg != "" && excludeArg != "":
+		return "--tables and --exclude are mutually exclusive"
+	}
+
+	return ""
+}
+
+func applyTableFilters(
+	schema introspect.Schema, tablesArg, excludeArg string, cfg config.Config,
+) (introspect.Schema, []string) {
+	switch {
+	case tablesArg != "":
+		filtered, missing := includeTables(schema.Tables, splitTrim(tablesArg))
+		schema.Tables = filtered
+
+		return schema, missing
+	case excludeArg != "":
+		filtered, missing := excludeTables(schema.Tables, splitTrim(excludeArg))
+		schema.Tables = filtered
+
+		return schema, missing
+	}
+	if yamlExclude := yamlExcludeList(cfg); len(yamlExclude) > 0 {
+		filtered, _ := excludeTables(schema.Tables, yamlExclude)
+		schema.Tables = filtered
+	}
+
+	return schema, nil
+}
+
+func buildInsertOptions(
+	rows int, truncate bool, seed int64, dryRun, verbose bool,
+	set map[string]bool, cfg config.Config,
+) insert.Options {
+	defaultRows := rows
+	if !set["rows"] && cfg.Rows != nil {
+		defaultRows = *cfg.Rows
+	}
+
+	var rowsByTable map[string]int
+	if !set["rows"] {
+		rowsByTable = perTableRows(cfg)
+	}
+
+	effectiveTruncate := truncate
+	if !set["truncate"] && cfg.Truncate != nil {
+		effectiveTruncate = *cfg.Truncate
+	}
+
+	opts := insert.Options{
+		Rows:        defaultRows,
+		RowsByTable: rowsByTable,
+		Truncate:    effectiveTruncate,
+		DryRun:      dryRun,
+		Verbose:     verbose,
+	}
+	switch {
+	case set["seed"]:
+		s := uint64(seed) //nolint:gosec // seed is validated >= 0 in validateFlags
+		opts.Seed = &s
+	case cfg.Seed != nil:
+		s := *cfg.Seed
+		opts.Seed = &s
+	}
+
+	return opts
+}
+
+func printMissingDSN(w io.Writer) {
+	fmt.Fprintln(w, "seeder: missing <dsn>")
+	fmt.Fprintln(w, "Usage: seeder <dsn> [flags]")
+	fmt.Fprintln(w, "Try:   seeder postgres://user:pass@localhost:5432/mydb")
+	fmt.Fprintln(w, "Run 'seeder --help' for more info.")
+}
+
+func printOrphanFKs(w io.Writer, orphans []orphanFK) {
+	fmt.Fprintln(w, "seeder: filtered tables have NOT NULL FK(s) to dropped tables:")
+	for _, m := range orphans {
+		fmt.Fprintf(w, "  %s.%s -> %s.%s\n", m.FromTable, m.FromCol, m.ToTable, m.ToCol)
+	}
+	fmt.Fprintln(w, "Either include those parent tables or remove the filter.")
+}
+
+func printHeader(w io.Writer, order []string, fkCount int, opts insert.Options) {
+	fmt.Fprintf(w, "seeder: %d table(s), %d FK(s)\n", len(order), fkCount)
+	fmt.Fprintf(w, "order:  %s\n", strings.Join(order, " -> "))
+	switch {
+	case opts.DryRun:
+		fmt.Fprintln(w, "mode:   dry-run (no INSERT)")
+	case opts.Truncate:
+		fmt.Fprintln(w, "mode:   truncate + insert")
+	default:
+		fmt.Fprintln(w, "mode:   append")
+	}
+}
+
 var valueFlags = map[string]bool{
 	"rows":    true,
 	"tables":  true,
 	"exclude": true,
 	"seed":    true,
+	"config":  true,
+}
+
+// configAt loads the config at path; an empty path auto-detects seeder.yaml in the CWD.
+//
+//nolint:wrapcheck // config package already wraps errors with a seeder.yaml: prefix
+func configAt(path string) (config.Config, error) {
+	if path != "" {
+		return config.Load(path)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return config.Config{}, fmt.Errorf("cwd: %w", err)
+	}
+	cfg, _, err := config.AutoDetect(cwd)
+
+	return cfg, err
+}
+
+func perTableRows(cfg config.Config) map[string]int {
+	if len(cfg.Tables) == 0 {
+		return nil
+	}
+	out := make(map[string]int, len(cfg.Tables))
+	for name, tc := range cfg.Tables {
+		if tc.Rows != nil {
+			out[name] = *tc.Rows
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+
+	return out
+}
+
+func yamlExcludeList(cfg config.Config) []string {
+	var out []string
+	for name, tc := range cfg.Tables {
+		if tc.Exclude {
+			out = append(out, name)
+		}
+	}
+
+	return out
+}
+
+func unknownConfigTables(cfg config.Config, schema introspect.Schema) []string {
+	if len(cfg.Tables) == 0 {
+		return nil
+	}
+	known := make(map[string]bool, len(schema.Tables))
+	for _, t := range schema.Tables {
+		known[t.Name] = true
+	}
+	var out []string
+	for name := range cfg.Tables {
+		if !known[name] {
+			out = append(out, name)
+		}
+	}
+	slices.Sort(out)
+
+	return out
 }
 
 // reorderArgs moves flags to the front so flag.Parse sees them even when
@@ -343,12 +484,14 @@ func PrintUsage(w io.Writer) {
 	fmt.Fprintln(w, "  seeder postgres://...  --dry-run")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "FLAGS:")
-	fmt.Fprintln(w, "  --rows int       Rows per table (default: 1000)")
-	fmt.Fprintln(w, "  --tables string  Comma-separated tables to include (default: all)")
-	fmt.Fprintln(w, "  --exclude string Comma-separated tables to skip (cannot combine with --tables)")
-	fmt.Fprintln(w, "  --truncate       TRUNCATE before insert (default: append)")
-	fmt.Fprintln(w, "  --seed N         Deterministic RNG seed (>= 0; default: time-based)")
+	fmt.Fprintln(w, "  --config <file>  Path to seeder.yaml (default: auto-detect ./seeder.yaml)")
 	fmt.Fprintln(w, "  --dry-run        Print plan, do not insert")
+	fmt.Fprintln(w, "  --exclude string Comma-separated tables to skip (cannot combine with --tables)")
+	fmt.Fprintln(w, "  --rows int       Rows per table (default: 1000; overrides yaml when set)")
+	fmt.Fprintln(w, "  --seed N         Deterministic RNG seed (>= 0; default: time-based)")
+	fmt.Fprintln(w, "  --tables string  Comma-separated tables to include (default: all)")
+	fmt.Fprintln(w, "  --truncate       TRUNCATE before insert (default: append)")
+	fmt.Fprintln(w, "  --verbose        Print per-column inference decisions")
 	fmt.Fprintln(w, "  --version, -v    Print seeder version")
 	fmt.Fprintln(w, "  --help, -h       Show this help")
 	fmt.Fprintln(w)
