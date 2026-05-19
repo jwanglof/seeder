@@ -24,7 +24,8 @@ type Options struct {
 	Rows     int
 	Truncate bool
 	DryRun   bool
-	Seed     uint64
+	// Seed is nil for a time-based RNG seed; set to take a deterministic value.
+	Seed *uint64
 }
 
 type Stats struct {
@@ -57,8 +58,10 @@ func Run(
 		byName[t.Name] = t
 	}
 
-	seed := opts.Seed
-	if seed == 0 {
+	var seed uint64
+	if opts.Seed != nil {
+		seed = *opts.Seed
+	} else {
 		seed = uint64(time.Now().UnixNano())
 	}
 	faker := gofakeit.New(seed)

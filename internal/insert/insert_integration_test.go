@@ -91,7 +91,7 @@ func TestRun_Basic(t *testing.T) {
 	var buf bytes.Buffer
 	stats, err := insert.Run(ctx, dsn, schema, order, insert.Options{
 		Rows: 50,
-		Seed: 42,
+		Seed: new(uint64(42)),
 	}, &buf)
 	if err != nil {
 		t.Fatalf("insert.Run: %v", err)
@@ -198,7 +198,7 @@ func TestRun_Determinism(t *testing.T) {
 			t.Fatalf("plan: %v", err)
 		}
 		var buf bytes.Buffer
-		if _, err := insert.Run(ctx, dsn, schema, order, insert.Options{Rows: 10, Seed: 42}, &buf); err != nil {
+		if _, err := insert.Run(ctx, dsn, schema, order, insert.Options{Rows: 10, Seed: new(uint64(42))}, &buf); err != nil {
 			t.Fatalf("insert.Run: %v", err)
 		}
 		rows, err := conn.Query(ctx, "SELECT email FROM users ORDER BY id")
@@ -260,7 +260,7 @@ func TestRun_DryRun(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if _, err := insert.Run(ctx, dsn, schema, order, insert.Options{Rows: 10, Seed: 42, DryRun: true}, &buf); err != nil {
+	if _, err := insert.Run(ctx, dsn, schema, order, insert.Options{Rows: 10, Seed: new(uint64(42)), DryRun: true}, &buf); err != nil {
 		t.Fatalf("insert.Run dry-run: %v", err)
 	}
 
@@ -304,7 +304,7 @@ func TestRun_Truncate(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if _, err := insert.Run(ctx, dsn, schema, order, insert.Options{Rows: 20, Seed: 42, Truncate: true}, &buf); err != nil {
+	if _, err := insert.Run(ctx, dsn, schema, order, insert.Options{Rows: 20, Seed: new(uint64(42)), Truncate: true}, &buf); err != nil {
 		t.Fatalf("insert.Run truncate: %v", err)
 	}
 

@@ -32,7 +32,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	tablesArg := fs.String("tables", "", "comma-separated tables to include (default: all)")
 	excludeArg := fs.String("exclude", "", "comma-separated tables to skip (mutually exclusive with --tables)")
 	truncate := fs.Bool("truncate", false, "TRUNCATE before insert")
-	seed := fs.Int64("seed", 0, "deterministic RNG seed (0 = time-based)")
+	seed := fs.Int64("seed", 0, "deterministic RNG seed (default: time-based when omitted)")
 	dryRun := fs.Bool("dry-run", false, "print plan, do not insert")
 
 	reordered, err := reorderArgs(args, valueFlags)
@@ -145,8 +145,13 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		Rows:     *rows,
 		Truncate: *truncate,
 		DryRun:   *dryRun,
-		Seed:     uint64(*seed),
 	}
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "seed" {
+			s := uint64(*seed) //nolint:gosec // *seed is validated >= 0 earlier
+			opts.Seed = &s
+		}
+	})
 
 	start := time.Now()
 	stats, err := insert.Run(ctx, dsn, schema, order, opts, stdout)
