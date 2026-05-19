@@ -265,8 +265,9 @@ func mySQLKind(dataType, columnType string) (Kind, []string) {
 // or `set('a','b','c')` MySQL column_type literal. A label that itself
 // contains a single quote is encoded by MySQL as two consecutive ASCII
 // apostrophes; parseMySQLEnumLabels collapses that pair back to one.
-// (Avoid writing the literal escape sequence here: gofmt's doc comment
-// normalizer rewrites it to U+201D.)
+// (The literal escape sequence is described in words because gofmt's doc
+// comment normalizer rewrites it to U+201D; tracked upstream in
+// golang/go#76975.)
 var enumLabelRe = regexp.MustCompile(`'((?:[^']|'')*)'`)
 
 func parseMySQLEnumLabels(columnType string) []string {
