@@ -1,0 +1,30 @@
+# seeder.yaml — example configuration.
+#
+# Auto-detected when present in the working directory, or pass
+# --config <file> to point at one explicitly.
+#
+# Precedence: CLI flag > seeder.yaml > built-in default.
+
+version: 1
+
+# Default rows per table (--rows on the command line wins and overrides
+# per-table values below).
+rows: 1000
+
+# Default RNG seed (--seed on the command line wins). Leave unset for a
+# time-based seed.
+seed: 42
+
+# TRUNCATE before insert (--truncate on the command line wins).
+truncate: false
+
+# Locale for inferred text values. Reserved for a future release; the
+# parser accepts the field today but it has no effect yet.
+locale: en
+
+# Per-table overrides.
+tables:
+  users:
+    rows: 10000
+  audit_log:
+    exclude: true

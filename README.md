@@ -49,12 +49,14 @@ x86_64 / arm64) will land on GitHub Releases.
 seeder <dsn> [flags]
 
 FLAGS:
-  --rows int       Rows per table (default: 1000)
-  --tables string  Comma-separated tables to include (default: all)
-  --exclude string Comma-separated tables to skip (cannot combine with --tables)
-  --truncate       TRUNCATE before insert (default: append)
-  --seed N         Deterministic RNG seed (>= 0; default: time-based)
+  --config <file>  Path to seeder.yaml (default: auto-detect ./seeder.yaml)
   --dry-run        Print plan, do not insert
+  --exclude string Comma-separated tables to skip (cannot combine with --tables)
+  --rows int       Rows per table (default: 1000; overrides yaml when set)
+  --seed N         Deterministic RNG seed (>= 0; default: time-based)
+  --tables string  Comma-separated tables to include (default: all)
+  --truncate       TRUNCATE before insert (default: append)
+  --verbose        Print per-column inference decisions
   --version, -v    Print seeder version
   --help, -h       Show this help
 ```
@@ -98,6 +100,40 @@ dropdb mydb && createdb mydb && goose up && seeder $DATABASE_URL --rows 5000
     make migrate
     seeder $TEST_DB --rows 1000 --seed 42
     go test -tags=integration ./...
+```
+
+## Configuration
+
+`seeder` runs zero-config out of the box. When you want to pin row counts or skip specific tables without retyping flags every time, drop a `seeder.yaml` next to where you run the command — it is auto-detected. Use `--config path/to/seeder.yaml` to point at one explicitly.
+
+```yaml
+version: 1
+rows: 1000
+seed: 42
+truncate: false
+tables:
+  users:
+    rows: 10000
+  audit_log:
+    exclude: true
+```
+
+Precedence is **CLI flag > seeder.yaml > built-in default**. Setting `--rows N` on the command line replaces yaml's row counts for every table; omit it to let per-table values in `tables.<name>.rows` take effect. A full example with comments lives at [`seeder.example.yaml`](./seeder.example.yaml).
+
+Pass `--verbose` to see which inference rule each column matched, e.g., when you are debugging why `bio` ended up with a long paragraph instead of the short string you expected:
+
+```
+$ seeder $DATABASE_URL --rows 5 --verbose
+seeder: 3 table(s), 2 FK(s)
+order:  users -> orders -> comments
+mode:   append
+  users
+    id            skip: identity
+    email         name match: Email
+    name          name match: Name
+    created_at    name match: PastDate
+  users  5 rows (1.2ms)
+  ...
 ```
 
 ## How it works
