@@ -92,6 +92,16 @@ func validateColumn(table, col string, cc ColumnConfig) error {
 	case !hasGen && !hasVal:
 		return fmt.Errorf("seeder.yaml: tables.%s.columns.%s: one of `generator` or `value` must be set", table, col)
 	}
+	if hasVal {
+		switch cc.Value.(type) {
+		case string, bool, int, int64, uint64, float64:
+		default:
+			return fmt.Errorf(
+				"seeder.yaml: tables.%s.columns.%s.value must be a scalar (string, number, bool), got %T",
+				table, col, cc.Value,
+			)
+		}
+	}
 	return nil
 }
 

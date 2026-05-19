@@ -121,6 +121,18 @@ func TestParse_Errors(t *testing.T) {
 			in:   "version: 1\ntables:\n  users:\n    columns:\n      email: {}\n",
 			want: "one of `generator` or `value` must be set",
 		},
+		{
+			name: "column value is a map",
+			in: "version: 1\ntables:\n  users:\n    columns:\n      meta:\n" +
+				"        value:\n          key: foo\n",
+			want: "value must be a scalar",
+		},
+		{
+			name: "column value is a list",
+			in: "version: 1\ntables:\n  users:\n    columns:\n      tags:\n" +
+				"        value:\n          - a\n          - b\n",
+			want: "value must be a scalar",
+		},
 	}
 
 	for _, tt := range tests {
