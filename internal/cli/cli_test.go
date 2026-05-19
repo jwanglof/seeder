@@ -1,12 +1,15 @@
 package cli_test
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/mickamy/seeder/internal/cli"
+	"github.com/mickamy/seeder/internal/config"
 	"github.com/mickamy/seeder/internal/introspect"
 )
 
@@ -220,6 +223,173 @@ func TestRun_NegativeRows(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "--rows must be >= 0") {
 		t.Errorf("stderr = %q; want negative rows message", stderr.String())
+	}
+}
+
+func TestApplyTableFilters_YamlExclude(t *testing.T) {
+	t.Parallel()
+
+	schema := introspect.Schema{Tables: []introspect.Table{
+		{Name: "users"}, {Name: "orders"}, {Name: "audit_log"},
+	}}
+	cfg := config.Config{
+		Version: 1,
+		Tables: map[string]config.TableConfig{
+			"audit_log": {Exclude: true},
+		},
+	}
+
+	schema, missing := cli.ApplyTableFilters(schema, "", "", cfg)
+	if len(missing) != 0 {
+		t.Errorf("missing = %v; want []", missing)
+	}
+	got := tableNames(schema.Tables)
+	want := []string{"users", "orders"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("tables = %v; want %v", got, want)
+	}
+}
+
+func TestApplyTableFilters_CLIWinsOverYaml(t *testing.T) {
+	t.Parallel()
+
+	schema := introspect.Schema{Tables: []introspect.Table{
+		{Name: "users"}, {Name: "orders"}, {Name: "audit_log"},
+	}}
+	cfg := config.Config{
+		Version: 1,
+		Tables: map[string]config.TableConfig{
+			"audit_log": {Exclude: true},
+		},
+	}
+
+	schema, _ = cli.ApplyTableFilters(schema, "users,audit_log", "", cfg)
+	got := tableNames(schema.Tables)
+	want := []string{"users", "audit_log"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("tables = %v; want %v (CLI --tables wins; yaml exclude ignored)", got, want)
+	}
+}
+
+func TestBuildInsertOptions_RowsPriority(t *testing.T) {
+	t.Parallel()
+
+	five := 5
+	twenty := 20
+	cfg := config.Config{
+		Version: 1,
+		Rows:    &five,
+		Tables: map[string]config.TableConfig{
+			"users": {Rows: &twenty},
+		},
+	}
+
+	cases := []struct {
+		name              string
+		rows              int
+		set               map[string]bool
+		wantDefaultRows   int
+		wantUsersOverride int
+	}{
+		{
+			name:              "cli explicit overrides yaml (no per-table override applied)",
+			rows:              100,
+			set:               map[string]bool{"rows": true},
+			wantDefaultRows:   100,
+			wantUsersOverride: 0,
+		},
+		{
+			name:              "yaml takes effect when cli omits --rows",
+			rows:              1000,
+			set:               map[string]bool{},
+			wantDefaultRows:   5,
+			wantUsersOverride: 20,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			opts := cli.BuildInsertOptions(tc.rows, false, 0, false, false, tc.set, cfg)
+			if opts.Rows != tc.wantDefaultRows {
+				t.Errorf("Rows = %d; want %d", opts.Rows, tc.wantDefaultRows)
+			}
+			if got := opts.RowsByTable["users"]; got != tc.wantUsersOverride {
+				t.Errorf("RowsByTable[users] = %d; want %d", got, tc.wantUsersOverride)
+			}
+		})
+	}
+}
+
+func TestBuildInsertOptions_SeedPriority(t *testing.T) {
+	t.Parallel()
+
+	yamlSeed := uint64(7)
+	cfg := config.Config{Version: 1, Seed: &yamlSeed}
+
+	cases := []struct {
+		name string
+		set  map[string]bool
+		seed int64
+		want uint64
+	}{
+		{"cli wins", map[string]bool{"seed": true}, 42, 42},
+		{"yaml fallback", map[string]bool{}, 0, 7},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			opts := cli.BuildInsertOptions(1, false, tc.seed, false, false, tc.set, cfg)
+			if opts.Seed == nil {
+				t.Fatal("Seed = nil; want non-nil")
+			}
+			if *opts.Seed != tc.want {
+				t.Errorf("Seed = %d; want %d", *opts.Seed, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildInsertOptions_NoConfigNoSeed(t *testing.T) {
+	t.Parallel()
+
+	opts := cli.BuildInsertOptions(10, false, 0, false, false, map[string]bool{}, config.Config{})
+	if opts.Seed != nil {
+		t.Errorf("Seed = %v; want nil (time-based)", opts.Seed)
+	}
+	if opts.Rows != 10 {
+		t.Errorf("Rows = %d; want 10", opts.Rows)
+	}
+}
+
+func TestRun_ConfigErrors(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	versionMismatch := filepath.Join(dir, "seeder.yaml")
+	if err := os.WriteFile(versionMismatch, []byte("version: 99\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"missing file", filepath.Join(dir, "does-not-exist.yaml"), "seeder.yaml:"},
+		{"unsupported version", versionMismatch, "unsupported version"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var stdout, stderr strings.Builder
+			code := cli.Run([]string{"postgres://x", "--config", tc.path}, &stdout, &stderr)
+			if code != 2 {
+				t.Errorf("exit code = %d; want 2 (Usage)", code)
+			}
+			if !strings.Contains(stderr.String(), tc.want) {
+				t.Errorf("stderr = %q; want substring %q", stderr.String(), tc.want)
+			}
+		})
 	}
 }
 

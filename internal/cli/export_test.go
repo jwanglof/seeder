@@ -3,10 +3,12 @@ package cli
 type OrphanFK = orphanFK
 
 var (
-	ReorderArgs   = reorderArgs
-	SplitTrim     = splitTrim
-	IncludeTables = includeTables
-	ExcludeTables = excludeTables
-	OrphanFKs     = orphanFKs
-	ValueFlags    = valueFlags
+	ReorderArgs        = reorderArgs
+	SplitTrim          = splitTrim
+	IncludeTables      = includeTables
+	ExcludeTables      = excludeTables
+	OrphanFKs          = orphanFKs
+	ValueFlags         = valueFlags
+	ApplyTableFilters  = applyTableFilters
+	BuildInsertOptions = buildInsertOptions
 )
