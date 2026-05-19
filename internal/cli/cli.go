@@ -361,7 +361,7 @@ func unknownConfigColumns(cfg config.Config, schema introspect.Schema) []string 
 	for tname, tc := range cfg.Tables {
 		cols, ok := schemaCols[tname]
 		if !ok {
-			continue
+			continue // unknown table; surfaced by unknownConfigTables
 		}
 		for cname := range tc.Columns {
 			if !cols[cname] {

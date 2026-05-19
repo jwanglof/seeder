@@ -138,6 +138,8 @@ Per-column overrides under `tables.<name>.columns.<col>` bypass inference for a 
 - `generator: <Name>` — force a built-in generator (e.g., `Email`, `UUID`, `Phone`, `PastDate`; `seeder --help` lists them via the preflight error).
 - `value: <literal>` — pin the column to a fixed yaml value (string, number, bool).
 
+Foreign-key columns are not overridable: yaml entries for them are ignored and the FK pool is used instead, so children still point at real parents.
+
 The yaml `locale` field is equivalent to the `--locale` flag and follows the same precedence.
 
 Pass `--verbose` to see which inference rule each column matched, e.g., when you are debugging why `bio` ended up with a long paragraph instead of the short string you expected:
