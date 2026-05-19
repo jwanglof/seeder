@@ -41,13 +41,13 @@ CREATE TABLE comments (
 );
 `
 
-// Set SEEDER_TEST_DSN=postgres://... to run; otherwise the test is skipped.
+// Set SEEDER_TEST_DSN_POSTGRES=postgres://... to run; otherwise the test is skipped.
 //
 //nolint:paralleltest,tparallel // mutates the public schema; cannot run in parallel
 func TestIntrospect(t *testing.T) {
-	dsn := os.Getenv("SEEDER_TEST_DSN")
+	dsn := os.Getenv("SEEDER_TEST_DSN_POSTGRES")
 	if dsn == "" {
-		t.Skip("SEEDER_TEST_DSN not set")
+		t.Skip("SEEDER_TEST_DSN_POSTGRES not set")
 	}
 
 	ctx := t.Context()
@@ -150,15 +150,9 @@ func TestIntrospect(t *testing.T) {
 		t.Errorf("comments FK tables = %v; want to include both users and orders", commentFKTables)
 	}
 
-	if len(schema.Enums) != 1 {
-		t.Fatalf("enums = %d; want 1", len(schema.Enums))
-	}
-	if schema.Enums[0].Name != "order_status" {
-		t.Errorf("enum name = %q; want order_status", schema.Enums[0].Name)
-	}
 	wantVals := []string{"pending", "paid", "shipped"}
-	if !reflect.DeepEqual(schema.Enums[0].Values, wantVals) {
-		t.Errorf("enum values = %v; want %v", schema.Enums[0].Values, wantVals)
+	if !reflect.DeepEqual(statusCol.EnumValues, wantVals) {
+		t.Errorf("orders.status EnumValues = %v; want %v", statusCol.EnumValues, wantVals)
 	}
 }
 

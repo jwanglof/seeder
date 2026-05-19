@@ -2,13 +2,15 @@
 
 > Zero-config database seeder — one command, realistic data, no factory code.
 
-`seeder` populates your Postgres database with realistic fake data straight
-from the schema. No factory code, no YAML, no AI key. Point it at a DSN and
-it figures out the rest: it introspects your tables, infers what each column
-should look like from its name and type, and bulk-inserts via `COPY` while
-respecting your foreign-key constraints.
+`seeder` populates your MySQL or Postgres database with realistic fake data
+straight from the schema. No factory code, no YAML, no AI key. Point it at a
+DSN and it figures out the rest: it introspects your tables, infers what each
+column should look like from its name and type, and bulk-inserts (multi-row
+`INSERT` on MySQL, `COPY` on Postgres) while respecting your foreign-key
+constraints.
 
 ```bash
+$ seeder mysql://root:pass@localhost:3306/mydb --rows 1000 --truncate --seed 42
 $ seeder postgres://user:pass@localhost:5432/mydb --rows 1000 --truncate --seed 42
 seeder: 3 table(s), 3 FK(s)
 order:  users -> orders -> comments
@@ -164,8 +166,10 @@ mode:   append
 
 ### Schema introspection
 
-`seeder` queries `information_schema` and `pg_catalog` for tables, columns,
-primary keys, foreign keys, and enum types in the `public` schema. No
+`seeder` queries `information_schema` (plus `pg_catalog` / `pg_constraint` on
+Postgres for enum types and composite-FK column ordering) for tables, columns,
+primary keys, foreign keys, and enum labels. The current database is scoped
+via `DATABASE()` on MySQL; the `public` schema is scoped on Postgres. No
 schema changes, no privileged access — just standard SELECTs.
 
 ### Smart inference
@@ -237,11 +241,10 @@ a random parent PK for each FK column.
 
 ## Current scope
 
-Postgres only. Single-column FKs only. English and Japanese locales. No
-JSON/JSONB richer inference. Everything else — MySQL, more locales,
-LLM-assisted text, polymorphic / composite FKs, alternate output modes,
-existing-DB statistics sampling, raw `DEFAULT` parsing — remains on the
-v0.2.0+ roadmap.
+Single-column FKs only. English and Japanese locales. No JSON/JSONB richer
+inference. Everything else — more locales, LLM-assisted text, polymorphic /
+composite FKs, alternate output modes, existing-DB statistics sampling, raw
+`DEFAULT` parsing — remains on the v0.2.0+ roadmap.
 
 ## Develop
 
@@ -253,8 +256,9 @@ make lint               # golangci-lint run
 # Bring up local Postgres + MySQL via docker compose
 docker compose up -d
 
-# Integration tests against the running Postgres
-SEEDER_TEST_DSN=postgres://postgres:pass@localhost:5432/dev?sslmode=disable \
+# Integration tests (set either or both; unset drivers skip their tests)
+SEEDER_TEST_DSN_MYSQL=mysql://root:pass@localhost:3306/dev?parseTime=true \
+SEEDER_TEST_DSN_POSTGRES=postgres://postgres:pass@localhost:5432/dev?sslmode=disable \
   make test-integration
 ```
 

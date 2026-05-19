@@ -201,25 +201,23 @@ var nameRules = []nameRule{
 	},
 }
 
-func Pick(f *gofakeit.Faker, col introspect.Column, enums map[string][]string, locale Locale) generator.Func {
+func Pick(f *gofakeit.Faker, col introspect.Column, locale Locale) generator.Func {
 	if r, ok := matchRule(col); ok {
 		gen := r.gen(locale)
 
 		return func() any { return gen(f) }
 	}
 
-	return generator.FromKind(f, col.Kind, col.UDTName, enums)
+	return generator.FromKind(f, col.Kind, col.EnumValues)
 }
 
 // Explain reports which rule Pick will use for col; meant for --verbose output.
-func Explain(col introspect.Column, enums map[string][]string) string {
+func Explain(col introspect.Column) string {
 	if r, ok := matchRule(col); ok {
 		return "name match: " + r.label
 	}
-	if col.Kind == introspect.KindEnum && col.UDTName != "" {
-		if _, ok := enums[col.UDTName]; ok {
-			return "enum: " + col.UDTName
-		}
+	if col.Kind == introspect.KindEnum && len(col.EnumValues) > 0 {
+		return "enum: " + strings.Join(col.EnumValues, ",")
 	}
 
 	return "kind: " + col.Kind.String()

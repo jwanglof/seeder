@@ -58,11 +58,6 @@ func Run(
 	}
 	defer func() { _ = drv.Close(ctx) }()
 
-	enums := make(map[string][]string, len(schema.Enums))
-	for _, e := range schema.Enums {
-		enums[e.Name] = e.Values
-	}
-
 	byName := make(map[string]introspect.Table, len(schema.Tables))
 	for _, t := range schema.Tables {
 		byName[t.Name] = t
@@ -91,7 +86,7 @@ func Run(
 		if !ok {
 			return stats, fmt.Errorf("table %q not in schema", name)
 		}
-		s, err := insertTable(ctx, drv, t, opts, faker, enums, pool, poolCols[name], out)
+		s, err := insertTable(ctx, drv, t, opts, faker, pool, poolCols[name], out)
 		if err != nil {
 			return stats, fmt.Errorf("insert %s: %w", name, err)
 		}
@@ -139,7 +134,7 @@ type fkSpec struct {
 }
 
 func planColumns(
-	t introspect.Table, faker *gofakeit.Faker, enums map[string][]string,
+	t introspect.Table, faker *gofakeit.Faker,
 	locale infer.Locale, overrides map[string]ColumnOverride,
 ) ([]colSpec, error) {
 	cols := make([]colSpec, 0, len(t.Columns))
@@ -159,7 +154,7 @@ func planColumns(
 		} else if gen != nil {
 			spec.gen = gen
 		} else {
-			spec.gen = infer.Pick(faker, c, enums, locale)
+			spec.gen = infer.Pick(faker, c, locale)
 		}
 		cols = append(cols, spec)
 	}
@@ -206,7 +201,6 @@ func insertTable(
 	t introspect.Table,
 	opts Options,
 	faker *gofakeit.Faker,
-	enums map[string][]string,
 	pool map[string]map[string][]any,
 	poolCols []string,
 	out io.Writer,
@@ -217,10 +211,10 @@ func insertTable(
 	}
 
 	if opts.Verbose {
-		explainTable(t, enums, opts.ColumnOverrides[t.Name], out)
+		explainTable(t, opts.ColumnOverrides[t.Name], out)
 	}
 
-	cols, err := planColumns(t, faker, enums, opts.Locale, opts.ColumnOverrides[t.Name])
+	cols, err := planColumns(t, faker, opts.Locale, opts.ColumnOverrides[t.Name])
 	if err != nil {
 		return Stats{Table: t.Name}, err
 	}
@@ -303,14 +297,14 @@ func joinColNames(cols []colSpec) string {
 	return strings.Join(names, ", ")
 }
 
-func explainTable(t introspect.Table, enums map[string][]string, overrides map[string]ColumnOverride, out io.Writer) {
+func explainTable(t introspect.Table, overrides map[string]ColumnOverride, out io.Writer) {
 	fmt.Fprintf(out, "  %s\n", t.Name)
 	for _, c := range t.Columns {
-		fmt.Fprintf(out, "    %s\t%s\n", c.Name, explainColumn(t, c, enums, overrides[c.Name]))
+		fmt.Fprintf(out, "    %s\t%s\n", c.Name, explainColumn(t, c, overrides[c.Name]))
 	}
 }
 
-func explainColumn(t introspect.Table, c introspect.Column, enums map[string][]string, ov ColumnOverride) string {
+func explainColumn(t introspect.Table, c introspect.Column, ov ColumnOverride) string {
 	if c.IsIdentity {
 		return "skip: identity"
 	}
@@ -327,5 +321,5 @@ func explainColumn(t introspect.Table, c introspect.Column, enums map[string][]s
 		return fmt.Sprintf("override: value=%v", ov.Value)
 	}
 
-	return infer.Explain(c, enums)
+	return infer.Explain(c)
 }

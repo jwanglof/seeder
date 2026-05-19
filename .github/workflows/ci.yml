@@ -43,6 +43,18 @@ jobs:
   test-integration:
     runs-on: ubuntu-latest
     services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: pass
+          MYSQL_DATABASE: dev
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -ppass"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
       postgres:
         image: postgres:16
         env:
@@ -56,7 +68,8 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      SEEDER_TEST_DSN: postgres://postgres:pass@localhost:5432/dev?sslmode=disable
+      SEEDER_TEST_DSN_MYSQL: mysql://root:pass@localhost:3306/dev?parseTime=true
+      SEEDER_TEST_DSN_POSTGRES: postgres://postgres:pass@localhost:5432/dev?sslmode=disable
     steps:
       - uses: actions/checkout@v6
 
