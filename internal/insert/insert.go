@@ -142,7 +142,9 @@ func planColumns(
 		if c.IsIdentity {
 			continue
 		}
-		if c.HasDefault && hasIntDefault(c.Kind) {
+		// A yaml override wins over the int-with-default skip: the user
+		// asked for a specific value/generator, so honor it.
+		if _, hasOverride := overrides[c.Name]; !hasOverride && c.HasDefault && hasIntDefault(c.Kind) {
 			continue
 		}
 
