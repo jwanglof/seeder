@@ -10,6 +10,7 @@ import (
 
 	"github.com/mickamy/seeder/internal/cli"
 	"github.com/mickamy/seeder/internal/config"
+	"github.com/mickamy/seeder/internal/infer"
 	"github.com/mickamy/seeder/internal/introspect"
 )
 
@@ -57,6 +58,11 @@ func TestReorderArgs(t *testing.T) {
 			name: "negative seed value",
 			in:   []string{"postgres://x", "--seed", "-42"},
 			want: []string{"--seed", "-42", "postgres://x"},
+		},
+		{
+			name: "locale flag with dsn first",
+			in:   []string{"postgres://x", "--locale", "ja"},
+			want: []string{"--locale", "ja", "postgres://x"},
 		},
 	}
 
@@ -309,7 +315,7 @@ func TestBuildInsertOptions_RowsPriority(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			opts := cli.BuildInsertOptions(tc.rows, false, 0, false, false, tc.set, cfg)
+			opts := cli.BuildInsertOptions(tc.rows, false, 0, false, false, infer.LocaleEN, tc.set, cfg)
 			if opts.Rows != tc.wantDefaultRows {
 				t.Errorf("Rows = %d; want %d", opts.Rows, tc.wantDefaultRows)
 			}
@@ -338,7 +344,7 @@ func TestBuildInsertOptions_SeedPriority(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			opts := cli.BuildInsertOptions(1, false, tc.seed, false, false, tc.set, cfg)
+			opts := cli.BuildInsertOptions(1, false, tc.seed, false, false, infer.LocaleEN, tc.set, cfg)
 			if opts.Seed == nil {
 				t.Fatal("Seed = nil; want non-nil")
 			}
@@ -394,7 +400,7 @@ func TestBuildInsertOptions_TruncatePriority(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			opts := cli.BuildInsertOptions(1, tc.cliTruncate, 0, false, false, tc.set, tc.cfg)
+			opts := cli.BuildInsertOptions(1, tc.cliTruncate, 0, false, false, infer.LocaleEN, tc.set, tc.cfg)
 			if opts.Truncate != tc.want {
 				t.Errorf("Truncate = %v; want %v", opts.Truncate, tc.want)
 			}
@@ -405,12 +411,21 @@ func TestBuildInsertOptions_TruncatePriority(t *testing.T) {
 func TestBuildInsertOptions_NoConfigNoSeed(t *testing.T) {
 	t.Parallel()
 
-	opts := cli.BuildInsertOptions(10, false, 0, false, false, map[string]bool{}, config.Config{})
+	opts := cli.BuildInsertOptions(10, false, 0, false, false, infer.LocaleEN, map[string]bool{}, config.Config{})
 	if opts.Seed != nil {
 		t.Errorf("Seed = %v; want nil (time-based)", opts.Seed)
 	}
 	if opts.Rows != 10 {
 		t.Errorf("Rows = %d; want 10", opts.Rows)
+	}
+}
+
+func TestBuildInsertOptions_LocaleWiresThrough(t *testing.T) {
+	t.Parallel()
+
+	opts := cli.BuildInsertOptions(1, false, 0, false, false, infer.LocaleJA, map[string]bool{}, config.Config{})
+	if opts.Locale != infer.LocaleJA {
+		t.Errorf("Locale = %q; want %q", opts.Locale, infer.LocaleJA)
 	}
 }
 
@@ -485,6 +500,134 @@ func TestRun_ConfigErrors(t *testing.T) {
 				t.Errorf("stderr = %q; want substring %q", stderr.String(), tc.want)
 			}
 		})
+	}
+}
+
+func TestRun_UnknownLocale(t *testing.T) {
+	t.Parallel()
+
+	// Point at a temp config so the ambient cwd seeder.yaml (if any) cannot
+	// fail the test for unrelated reasons.
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "seeder.yaml")
+	if err := os.WriteFile(cfgPath, []byte("version: 1\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	var stdout, stderr strings.Builder
+	code := cli.Run([]string{"postgres://x", "--locale", "fr", "--config", cfgPath}, &stdout, &stderr)
+	if code != 2 {
+		t.Errorf("exit code = %d; want 2 (Usage)", code)
+	}
+	if !strings.Contains(stderr.String(), "unknown locale") {
+		t.Errorf("stderr = %q; want unknown locale message", stderr.String())
+	}
+}
+
+func TestEffectiveLocaleString(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		set    map[string]bool
+		cliArg string
+		cfg    config.Config
+		want   string
+	}{
+		{"cli wins when set", map[string]bool{"locale": true}, "en", config.Config{Locale: "ja"}, "en"},
+		{"yaml fills in when cli omitted", map[string]bool{}, "", config.Config{Locale: "ja"}, "ja"},
+		{"empty when both unset", map[string]bool{}, "", config.Config{}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := cli.EffectiveLocaleString(tc.set, tc.cliArg, tc.cfg); got != tc.want {
+				t.Errorf("got %q; want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateColumnGenerators(t *testing.T) {
+	t.Parallel()
+
+	ok := config.Config{
+		Version: 1,
+		Tables: map[string]config.TableConfig{
+			"users": {Columns: map[string]config.ColumnConfig{
+				"email": {Generator: "Email"},
+			}},
+		},
+	}
+	if msg := cli.ValidateColumnGenerators(ok); msg != "" {
+		t.Errorf("ValidateColumnGenerators(ok) = %q; want \"\"", msg)
+	}
+
+	bad := config.Config{
+		Version: 1,
+		Tables: map[string]config.TableConfig{
+			"users": {Columns: map[string]config.ColumnConfig{
+				"email": {Generator: "NotAGenerator"},
+			}},
+		},
+	}
+	msg := cli.ValidateColumnGenerators(bad)
+	if !strings.Contains(msg, "unknown generator") {
+		t.Errorf("ValidateColumnGenerators(bad) = %q; want unknown generator message", msg)
+	}
+	if !strings.Contains(msg, "users.email") {
+		t.Errorf("ValidateColumnGenerators(bad) = %q; want users.email reference", msg)
+	}
+}
+
+func TestUnknownConfigColumns(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Config{
+		Version: 1,
+		Tables: map[string]config.TableConfig{
+			"users": {Columns: map[string]config.ColumnConfig{
+				"email":  {Generator: "Email"},
+				"emial":  {Generator: "Email"}, // typo
+				"unknwn": {Value: 1},           // typo
+			}},
+		},
+	}
+	schema := introspect.Schema{Tables: []introspect.Table{
+		{Name: "users", Columns: []introspect.Column{{Name: "email"}, {Name: "id"}}},
+	}}
+
+	got := cli.UnknownConfigColumns(cfg, schema)
+	want := []string{"users.emial", "users.unknwn"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("UnknownConfigColumns = %v; want %v", got, want)
+	}
+}
+
+func TestColumnOverrides(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Config{
+		Version: 1,
+		Tables: map[string]config.TableConfig{
+			"users": {Columns: map[string]config.ColumnConfig{
+				"email":   {Generator: "Email"},
+				"country": {Value: "JP"},
+			}},
+			"audit_log": {Exclude: true}, // no Columns entries
+		},
+	}
+
+	got := cli.ColumnOverrides(cfg)
+	if _, ok := got["audit_log"]; ok {
+		t.Errorf("audit_log should not appear in overrides")
+	}
+	users := got["users"]
+	if users["email"].Generator != "Email" {
+		t.Errorf("users.email = %+v; want Generator=Email", users["email"])
+	}
+	if users["country"].Value != "JP" {
+		t.Errorf("users.country = %+v; want Value=JP", users["country"])
 	}
 }
 

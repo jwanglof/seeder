@@ -1,4 +1,5 @@
-# seeder.yaml — example configuration.
+# seeder.yaml — example configuration tailored for the dogfood schema
+# (`compose/init/postgres/schema.sql`: users, orders, comments).
 #
 # Auto-detected when present in the working directory, or pass
 # --config <file> to point at one explicitly.
@@ -18,13 +19,22 @@ seed: 42
 # TRUNCATE before insert (--truncate on the command line wins).
 truncate: false
 
-# Locale for inferred text values. Reserved for a future release; the
-# parser accepts the field today but it has no effect yet.
+# Locale for inferred text values (en, ja). --locale on the command line wins.
 locale: en
 
 # Per-table overrides.
 tables:
   users:
+    rows: 5000
+    # Per-column overrides. Use `generator` to force a built-in (supplying
+    # an unknown name surfaces the full known list in the preflight error)
+    # or `value` to pin a literal. Set exactly one of the two per column.
+    columns:
+      email:
+        generator: Email
+      bio:
+        value: dogfood seed row
+  orders:
     rows: 10000
-  audit_log:
+  comments:
     exclude: true

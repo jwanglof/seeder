@@ -25,8 +25,15 @@ type Config struct {
 }
 
 type TableConfig struct {
-	Rows    *int `yaml:"rows,omitempty"`
-	Exclude bool `yaml:"exclude,omitempty"`
+	Rows    *int                    `yaml:"rows,omitempty"`
+	Exclude bool                    `yaml:"exclude,omitempty"`
+	Columns map[string]ColumnConfig `yaml:"columns,omitempty"`
+}
+
+// ColumnConfig requires exactly one of Generator or Value (see validateColumn).
+type ColumnConfig struct {
+	Generator string `yaml:"generator,omitempty"`
+	Value     any    `yaml:"value,omitempty"`
 }
 
 // Load returns an error wrapping os.ErrNotExist when the file is missing
@@ -66,9 +73,36 @@ func Parse(data []byte) (Config, error) {
 		if t.Rows != nil && *t.Rows < 0 {
 			return Config{}, fmt.Errorf("seeder.yaml: tables.%s.rows must be >= 0, got %d", name, *t.Rows)
 		}
+		for col, cc := range t.Columns {
+			if err := validateColumn(name, col, cc); err != nil {
+				return Config{}, err
+			}
+		}
 	}
 
 	return c, nil
+}
+
+func validateColumn(table, col string, cc ColumnConfig) error {
+	hasGen := cc.Generator != ""
+	hasVal := cc.Value != nil
+	switch {
+	case hasGen && hasVal:
+		return fmt.Errorf("seeder.yaml: tables.%s.columns.%s: cannot set both `generator` and `value`", table, col)
+	case !hasGen && !hasVal:
+		return fmt.Errorf("seeder.yaml: tables.%s.columns.%s: one of `generator` or `value` must be set", table, col)
+	}
+	if hasVal {
+		switch cc.Value.(type) {
+		case string, bool, int, int64, uint64, float64:
+		default:
+			return fmt.Errorf(
+				"seeder.yaml: tables.%s.columns.%s.value must be a scalar (string, number, bool), got %T",
+				table, col, cc.Value,
+			)
+		}
+	}
+	return nil
 }
 
 // AutoDetect returns found=false (without error) when DefaultFilename is

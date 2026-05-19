@@ -28,7 +28,14 @@ type Options struct {
 	DryRun      bool
 	Verbose     bool
 	// Seed is nil for a time-based RNG seed.
-	Seed *uint64
+	Seed            *uint64
+	Locale          infer.Locale
+	ColumnOverrides map[string]map[string]ColumnOverride
+}
+
+type ColumnOverride struct {
+	Generator string
+	Value     any
 }
 
 type Stats struct {
@@ -126,26 +133,54 @@ type fkSpec struct {
 	col   string
 }
 
-func planColumns(t introspect.Table, faker *gofakeit.Faker) []colSpec {
+func planColumns(
+	t introspect.Table, faker *gofakeit.Faker,
+	locale infer.Locale, overrides map[string]ColumnOverride,
+) ([]colSpec, error) {
 	cols := make([]colSpec, 0, len(t.Columns))
 	for _, c := range t.Columns {
 		if c.IsIdentity {
 			continue
 		}
-		if c.HasDefault && hasIntDefault(c.Kind) {
+		// FK columns always go through the FK pool, even when they have a
+		// default or a yaml override (the override is intentionally ignored).
+		if fk, ok := findFK(t, c.Name); ok {
+			cols = append(cols, colSpec{name: c.Name, nullable: c.Nullable, fk: fk})
+			continue
+		}
+		ov := overrides[c.Name]
+		hasOverride := ov.Generator != "" || ov.Value != nil
+		// A yaml override wins over the int-with-default skip; the user
+		// asked for a specific value/generator, so honor it.
+		if !hasOverride && c.HasDefault && hasIntDefault(c.Kind) {
 			continue
 		}
 
 		spec := colSpec{name: c.Name, nullable: c.Nullable}
-		if fk, ok := findFK(t, c.Name); ok {
-			spec.fk = fk
+		if hasOverride {
+			gen, err := overrideGenerator(faker, ov)
+			if err != nil {
+				return nil, fmt.Errorf("column %s: %w", c.Name, err)
+			}
+			spec.gen = gen
 		} else {
-			spec.gen = infer.Pick(faker, c)
+			spec.gen = infer.Pick(faker, c, locale)
 		}
 		cols = append(cols, spec)
 	}
 
-	return cols
+	return cols, nil
+}
+
+func overrideGenerator(faker *gofakeit.Faker, ov ColumnOverride) (generator.Func, error) {
+	switch {
+	case ov.Generator != "":
+		return generator.ByName(faker, ov.Generator) //nolint:wrapcheck // generator already returns a descriptive error
+	case ov.Value != nil:
+		v := ov.Value
+		return func() any { return v }, nil
+	}
+	return nil, nil //nolint:nilnil // no override; caller falls back to infer.Pick
 }
 
 // hasIntDefault returns true when an int-kind column is best left to the
@@ -186,10 +221,13 @@ func insertTable(
 	}
 
 	if opts.Verbose {
-		explainTable(t, out)
+		explainTable(t, opts.ColumnOverrides[t.Name], out)
 	}
 
-	cols := planColumns(t, faker)
+	cols, err := planColumns(t, faker, opts.Locale, opts.ColumnOverrides[t.Name])
+	if err != nil {
+		return Stats{Table: t.Name}, err
+	}
 	if len(cols) == 0 {
 		if rows > 0 && !opts.DryRun {
 			return Stats{Table: t.Name}, errNoWritableColumns
@@ -269,22 +307,29 @@ func joinColNames(cols []colSpec) string {
 	return strings.Join(names, ", ")
 }
 
-func explainTable(t introspect.Table, out io.Writer) {
+func explainTable(t introspect.Table, overrides map[string]ColumnOverride, out io.Writer) {
 	fmt.Fprintf(out, "  %s\n", t.Name)
 	for _, c := range t.Columns {
-		fmt.Fprintf(out, "    %s\t%s\n", c.Name, explainColumn(t, c))
+		fmt.Fprintf(out, "    %s\t%s\n", c.Name, explainColumn(t, c, overrides[c.Name]))
 	}
 }
 
-func explainColumn(t introspect.Table, c introspect.Column) string {
+func explainColumn(t introspect.Table, c introspect.Column, ov ColumnOverride) string {
 	if c.IsIdentity {
 		return "skip: identity"
 	}
-	if c.HasDefault && hasIntDefault(c.Kind) {
-		return "skip: int with default"
-	}
 	if fk, ok := findFK(t, c.Name); ok {
 		return fmt.Sprintf("fk: %s.%s", fk.table, fk.col)
+	}
+	hasOverride := ov.Generator != "" || ov.Value != nil
+	if !hasOverride && c.HasDefault && hasIntDefault(c.Kind) {
+		return "skip: int with default"
+	}
+	switch {
+	case ov.Generator != "":
+		return "override: generator=" + ov.Generator
+	case ov.Value != nil:
+		return fmt.Sprintf("override: value=%v", ov.Value)
 	}
 
 	return infer.Explain(c)

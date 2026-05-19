@@ -54,6 +54,7 @@ FLAGS:
   --config <file>  Path to seeder.yaml (default: auto-detect ./seeder.yaml)
   --dry-run        Print plan, do not insert
   --exclude string Comma-separated tables to skip (cannot combine with --tables)
+  --locale string  Locale for name-rule generators (en, ja; default: en)
   --rows int       Rows per table (default: 1000; overrides yaml when set)
   --seed N         Deterministic RNG seed (>= 0; default: time-based)
   --tables string  Comma-separated tables to include (default: all)
@@ -104,6 +105,12 @@ dropdb mydb && createdb mydb && goose up && seeder $DATABASE_URL --rows 5000
     go test -tags=integration ./...
 ```
 
+**Japanese-locale data.** Swap inferred names, addresses, prefectures, phone numbers, and postal codes for plausible Japanese values.
+
+```bash
+seeder $DATABASE_URL --locale ja
+```
+
 ## Configuration
 
 `seeder` runs zero-config out of the box. When you want to pin row counts or skip specific tables without retyping flags every time, drop a `seeder.yaml` next to where you run the command — it is auto-detected. Use `--config path/to/seeder.yaml` to point at one explicitly.
@@ -112,15 +119,32 @@ dropdb mydb && createdb mydb && goose up && seeder $DATABASE_URL --rows 5000
 version: 1
 rows: 1000
 seed: 42
+locale: en
 truncate: false
 tables:
   users:
+    rows: 5000
+    columns:
+      email:
+        generator: Email
+      bio:
+        value: dogfood seed row
+  orders:
     rows: 10000
-  audit_log:
+  comments:
     exclude: true
 ```
 
 Precedence is **CLI flag > seeder.yaml > built-in default**. Setting `--rows N` on the command line replaces yaml's row counts for every table; omit it to let per-table values in `tables.<name>.rows` take effect. A full example with comments lives at [`seeder.example.yaml`](./seeder.example.yaml).
+
+Per-column overrides under `tables.<name>.columns.<col>` bypass inference for a single column. Set exactly one of:
+
+- `generator: <Name>` — force a built-in generator (e.g., `Email`, `UUID`, `Phone`, `PastDate`). Supplying an unknown name surfaces the full known list as part of the preflight error. Built-ins resolve via gofakeit defaults and do not switch on `--locale`; use `value:` for a fixed string when you need a specific locale.
+- `value: <literal>` — pin the column to a fixed yaml value (string, number, bool).
+
+Foreign-key columns are not overridable: yaml entries for them are ignored and the FK pool is used instead, so children still point at real parents.
+
+The yaml `locale` field is equivalent to the `--locale` flag and follows the same precedence.
 
 Pass `--verbose` to see which inference rule each column matched, e.g., when you are debugging why `bio` ended up with a long paragraph instead of the short string you expected:
 
@@ -171,6 +195,8 @@ falls back to its SQL type:
 | Postgres enum (`USER-DEFINED`)                         | random label              |
 | anything else                                          | fallback by inferred Kind |
 
+Name patterns above that produce text (names, addresses, prefectures, cities, phone numbers, postal codes) switch dictionaries when `--locale ja` is set; locale-neutral patterns like `email` and `*_url` keep their English forms.
+
 `seeder` lets the database fill a column in exactly two cases:
 
 - The column is `IDENTITY` (`id int GENERATED ALWAYS AS IDENTITY`).
@@ -213,12 +239,12 @@ a random parent PK for each FK column.
   that satisfies both directions, so `seeder` reports the cycle as an error
   rather than silently dropping one of the edges.
 
-## v0.1.0 scope
+## Current scope
 
-Single-row FKs only. No locale support (English data). No JSON/JSONB richer
-inference. Everything else — locale, LLM-assisted text, polymorphic / composite
-FKs, alternate output modes, existing-DB statistics sampling, raw `DEFAULT`
-parsing — is planned for v0.2.0.
+Single-column FKs only. English and Japanese locales. No JSON/JSONB richer
+inference. Everything else — more locales, LLM-assisted text, polymorphic /
+composite FKs, alternate output modes, existing-DB statistics sampling, raw
+`DEFAULT` parsing — remains on the v0.2.0+ roadmap.
 
 ## Develop
 
