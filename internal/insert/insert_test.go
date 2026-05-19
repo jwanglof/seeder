@@ -34,6 +34,31 @@ func (m *mockDriver) ColumnValues(_ context.Context, _ string, _ []string) (map[
 	return map[string][]any{}, nil
 }
 
+func TestIsSerialDefault(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"empty", "", false},
+		{"literal zero", "0", false},
+		{"current_timestamp", "current_timestamp", false},
+		{"string literal", "'foo'::text", false},
+		{"nextval regclass", "nextval('users_id_seq'::regclass)", true},
+		{"nextval bare", "nextval('seq')", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := insert.IsSerialDefault(tc.in); got != tc.want {
+				t.Errorf("IsSerialDefault(%q) = %v; want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestInsertTable_PerTableRowsOverride(t *testing.T) {
 	t.Parallel()
 
@@ -169,13 +194,13 @@ func TestPlanColumns_ValueOverrideStableAcrossCalls(t *testing.T) {
 	}
 }
 
-func TestPlanColumns_OverrideKeepsIntWithDefault(t *testing.T) {
+func TestPlanColumns_OverrideBeatsSerialDefault(t *testing.T) {
 	t.Parallel()
 
 	table := introspect.Table{
 		Name: "users",
 		Columns: []introspect.Column{
-			{Name: "rank", Kind: introspect.KindInt, HasDefault: true},
+			{Name: "rank", Kind: introspect.KindInt, Default: "nextval('rank_seq'::regclass)"},
 		},
 	}
 	overrides := map[string]insert.ColumnOverride{
@@ -187,7 +212,7 @@ func TestPlanColumns_OverrideKeepsIntWithDefault(t *testing.T) {
 		t.Fatalf("PlanColumns: %v", err)
 	}
 	if len(cols) != 1 || cols[0].Gen() == nil {
-		t.Fatalf("len(cols) = %d; want 1 with non-nil gen (override beats int-with-default skip)", len(cols))
+		t.Fatalf("len(cols) = %d; want 1 with non-nil gen (override beats serial-default skip)", len(cols))
 	}
 	if got := cols[0].Gen()(); got != 7 {
 		t.Errorf("value override = %v; want 7", got)
