@@ -1,6 +1,7 @@
 package dsn_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/mickamy/seeder/internal/dsn"
@@ -22,6 +23,33 @@ func TestScheme(t *testing.T) {
 		if got := dsn.Scheme(tc.in); got != tc.want {
 			t.Errorf("Scheme(%q) = %q; want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestToMySQLDSN_InvalidInput(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"wrong scheme", "postgres://host/db", "expected mysql://"},
+		{"missing host", "mysql:///db", "missing host"},
+		{"missing db (no path)", "mysql://host:3306", "missing database name"},
+		{"missing db (root path)", "mysql://host:3306/", "missing database name"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := dsn.ToMySQLDSN(tc.in)
+			if err == nil {
+				t.Fatalf("ToMySQLDSN(%q): nil error, want failure", tc.in)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("ToMySQLDSN(%q) error = %q; want substring %q", tc.in, err.Error(), tc.want)
+			}
+		})
 	}
 }
 

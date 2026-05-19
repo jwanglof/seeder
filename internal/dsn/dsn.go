@@ -26,6 +26,16 @@ func ToMySQLDSN(dsn string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("parse mysql DSN: %w", err)
 	}
+	if u.Scheme != "mysql" {
+		return "", fmt.Errorf("expected mysql:// scheme, got %q", u.Scheme)
+	}
+	if u.Host == "" {
+		return "", errors.New("mysql DSN missing host")
+	}
+	db := strings.TrimPrefix(u.Path, "/")
+	if db == "" {
+		return "", errors.New("mysql DSN missing database name")
+	}
 
 	var b strings.Builder
 	if u.User != nil {
@@ -35,7 +45,7 @@ func ToMySQLDSN(dsn string) (string, error) {
 	b.WriteString("tcp(")
 	b.WriteString(u.Host)
 	b.WriteString(")/")
-	b.WriteString(strings.TrimPrefix(u.Path, "/"))
+	b.WriteString(db)
 	if u.RawQuery != "" {
 		b.WriteByte('?')
 		b.WriteString(u.RawQuery)
