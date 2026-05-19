@@ -349,6 +349,59 @@ func TestBuildInsertOptions_SeedPriority(t *testing.T) {
 	}
 }
 
+func TestBuildInsertOptions_TruncatePriority(t *testing.T) {
+	t.Parallel()
+
+	yamlTrue := true
+	yamlFalse := false
+
+	cases := []struct {
+		name        string
+		cliTruncate bool
+		set         map[string]bool
+		cfg         config.Config
+		want        bool
+	}{
+		{
+			name:        "cli explicit true overrides yaml false",
+			cliTruncate: true,
+			set:         map[string]bool{"truncate": true},
+			cfg:         config.Config{Version: 1, Truncate: &yamlFalse},
+			want:        true,
+		},
+		{
+			name:        "yaml true takes effect when cli omits --truncate",
+			cliTruncate: false,
+			set:         map[string]bool{},
+			cfg:         config.Config{Version: 1, Truncate: &yamlTrue},
+			want:        true,
+		},
+		{
+			name:        "yaml false takes effect when cli omits --truncate",
+			cliTruncate: false,
+			set:         map[string]bool{},
+			cfg:         config.Config{Version: 1, Truncate: &yamlFalse},
+			want:        false,
+		},
+		{
+			name:        "default false when both unset",
+			cliTruncate: false,
+			set:         map[string]bool{},
+			cfg:         config.Config{Version: 1},
+			want:        false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			opts := cli.BuildInsertOptions(1, tc.cliTruncate, 0, false, false, tc.set, tc.cfg)
+			if opts.Truncate != tc.want {
+				t.Errorf("Truncate = %v; want %v", opts.Truncate, tc.want)
+			}
+		})
+	}
+}
+
 func TestBuildInsertOptions_NoConfigNoSeed(t *testing.T) {
 	t.Parallel()
 
