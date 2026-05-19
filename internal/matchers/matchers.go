@@ -1,6 +1,7 @@
 package matchers
 
 import (
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -24,11 +25,12 @@ func Member(list []string) Matcher {
 	}
 }
 
-// Equal asserts v == want.
+// Equal asserts v deeply equals want; safe for slices, maps, and other
+// non-comparable types.
 func Equal(want any) Matcher {
 	return func(t *testing.T, v any) {
 		t.Helper()
-		if v != want {
+		if !reflect.DeepEqual(v, want) {
 			t.Errorf("got %v; want %v", v, want)
 		}
 	}
