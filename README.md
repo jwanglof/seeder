@@ -53,7 +53,7 @@ FLAGS:
   --tables string  Comma-separated tables to include (default: all)
   --exclude string Comma-separated tables to skip (cannot combine with --tables)
   --truncate       TRUNCATE before insert (default: append)
-  --seed int       Deterministic RNG seed (default: time-based)
+  --seed N         Deterministic RNG seed (>= 0; default: time-based)
   --dry-run        Print plan, do not insert
   --version, -v    Print seeder version
   --help, -h       Show this help

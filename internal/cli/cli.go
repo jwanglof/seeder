@@ -342,7 +342,7 @@ func PrintUsage(w io.Writer) {
 	fmt.Fprintln(w, "  --tables string  Comma-separated tables to include (default: all)")
 	fmt.Fprintln(w, "  --exclude string Comma-separated tables to skip (cannot combine with --tables)")
 	fmt.Fprintln(w, "  --truncate       TRUNCATE before insert (default: append)")
-	fmt.Fprintln(w, "  --seed int       Deterministic RNG seed (default: time-based)")
+	fmt.Fprintln(w, "  --seed N         Deterministic RNG seed (>= 0; default: time-based)")
 	fmt.Fprintln(w, "  --dry-run        Print plan, do not insert")
 	fmt.Fprintln(w, "  --version, -v    Print seeder version")
 	fmt.Fprintln(w, "  --help, -h       Show this help")
