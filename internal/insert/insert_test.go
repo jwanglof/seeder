@@ -3,10 +3,12 @@ package insert_test
 import (
 	"context"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/brianvoe/gofakeit/v7"
 
+	"github.com/mickamy/seeder/internal/infer"
 	"github.com/mickamy/seeder/internal/insert"
 	"github.com/mickamy/seeder/internal/introspect"
 )
@@ -83,5 +85,111 @@ func TestInsertTable_PerTableRowsOverride(t *testing.T) {
 	}
 	if drv.bulkCalls[1].table != "orders" || drv.bulkCalls[1].rows != 100 {
 		t.Errorf("call[1] = %+v; want {orders 100}", drv.bulkCalls[1])
+	}
+}
+
+func TestPlanColumns_GeneratorOverrideAppliesToNonFKColumn(t *testing.T) {
+	t.Parallel()
+
+	table := introspect.Table{
+		Name: "users",
+		Columns: []introspect.Column{
+			{Name: "email", Kind: introspect.KindString},
+		},
+	}
+	overrides := map[string]insert.ColumnOverride{
+		"email": {Generator: "Email"},
+	}
+
+	cols, err := insert.PlanColumns(table, gofakeit.New(42), infer.LocaleEN, overrides)
+	if err != nil {
+		t.Fatalf("PlanColumns: %v", err)
+	}
+	if len(cols) != 1 || cols[0].Gen() == nil {
+		t.Fatalf("len(cols) = %d, gen-nil = %v; want 1 with non-nil gen", len(cols), cols[0].Gen() == nil)
+	}
+	got, ok := cols[0].Gen()().(string)
+	if !ok || !strings.Contains(got, "@") {
+		t.Errorf("override-generated value = %v; want email-like string", got)
+	}
+}
+
+func TestPlanColumns_OverrideIgnoredForFKColumn(t *testing.T) {
+	t.Parallel()
+
+	table := introspect.Table{
+		Name: "orders",
+		Columns: []introspect.Column{
+			{Name: "user_id", Kind: introspect.KindInt},
+		},
+		ForeignKeys: []introspect.ForeignKey{
+			{Columns: []string{"user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+		},
+	}
+	overrides := map[string]insert.ColumnOverride{
+		"user_id": {Value: 999},
+	}
+
+	cols, err := insert.PlanColumns(table, gofakeit.New(42), infer.LocaleEN, overrides)
+	if err != nil {
+		t.Fatalf("PlanColumns: %v", err)
+	}
+	if len(cols) != 1 {
+		t.Fatalf("len(cols) = %d; want 1", len(cols))
+	}
+	if cols[0].Gen() != nil {
+		t.Errorf("FK column should not carry a generator; got gen = %v", cols[0].Gen())
+	}
+}
+
+func TestPlanColumns_ValueOverrideStableAcrossCalls(t *testing.T) {
+	t.Parallel()
+
+	table := introspect.Table{
+		Name: "users",
+		Columns: []introspect.Column{
+			{Name: "country", Kind: introspect.KindString},
+		},
+	}
+	overrides := map[string]insert.ColumnOverride{
+		"country": {Value: "JP"},
+	}
+
+	cols, err := insert.PlanColumns(table, gofakeit.New(42), infer.LocaleEN, overrides)
+	if err != nil {
+		t.Fatalf("PlanColumns: %v", err)
+	}
+	if cols[0].Gen() == nil {
+		t.Fatal("gen is nil; want value-override generator")
+	}
+	for range 5 {
+		if got := cols[0].Gen()(); got != "JP" {
+			t.Errorf("value override = %v; want stable JP literal", got)
+		}
+	}
+}
+
+func TestPlanColumns_OverrideKeepsIntWithDefault(t *testing.T) {
+	t.Parallel()
+
+	table := introspect.Table{
+		Name: "users",
+		Columns: []introspect.Column{
+			{Name: "rank", Kind: introspect.KindInt, HasDefault: true},
+		},
+	}
+	overrides := map[string]insert.ColumnOverride{
+		"rank": {Value: 7},
+	}
+
+	cols, err := insert.PlanColumns(table, gofakeit.New(42), infer.LocaleEN, overrides)
+	if err != nil {
+		t.Fatalf("PlanColumns: %v", err)
+	}
+	if len(cols) != 1 || cols[0].Gen() == nil {
+		t.Fatalf("len(cols) = %d; want 1 with non-nil gen (override beats int-with-default skip)", len(cols))
+	}
+	if got := cols[0].Gen()(); got != 7 {
+		t.Errorf("value override = %v; want 7", got)
 	}
 }
