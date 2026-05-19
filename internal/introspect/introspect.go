@@ -9,19 +9,19 @@ import (
 
 type Driver interface {
 	Close(ctx context.Context) error
-	Introspect(ctx context.Context) (*Schema, error)
+	Introspect(ctx context.Context) (Schema, error)
 }
 
-func Do(ctx context.Context, dataSourceName string) (*Schema, error) {
+func Do(ctx context.Context, dataSourceName string) (Schema, error) {
 	drv, err := openDriver(ctx, dataSourceName)
 	if err != nil {
-		return nil, err
+		return Schema{}, err
 	}
 	defer func() { _ = drv.Close(ctx) }()
 
 	schema, err := drv.Introspect(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("introspect: %w", err)
+		return Schema{}, fmt.Errorf("introspect: %w", err)
 	}
 
 	return schema, nil

@@ -30,21 +30,21 @@ func (d *postgresDriver) Close(ctx context.Context) error {
 	return nil
 }
 
-func (d *postgresDriver) Introspect(ctx context.Context) (*Schema, error) {
+func (d *postgresDriver) Introspect(ctx context.Context) (Schema, error) {
 	tables, err := d.fetchTablesWithColumns(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("fetch tables: %w", err)
+		return Schema{}, fmt.Errorf("fetch tables: %w", err)
 	}
 	if err := d.fetchPrimaryKeys(ctx, tables); err != nil {
-		return nil, fmt.Errorf("fetch primary keys: %w", err)
+		return Schema{}, fmt.Errorf("fetch primary keys: %w", err)
 	}
 	if err := d.fetchForeignKeys(ctx, tables); err != nil {
-		return nil, fmt.Errorf("fetch foreign keys: %w", err)
+		return Schema{}, fmt.Errorf("fetch foreign keys: %w", err)
 	}
 
 	enums, err := d.fetchEnums(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("fetch enums: %w", err)
+		return Schema{}, fmt.Errorf("fetch enums: %w", err)
 	}
 
 	enumNames := make(map[string]struct{}, len(enums))
@@ -61,7 +61,7 @@ func (d *postgresDriver) Introspect(ctx context.Context) (*Schema, error) {
 		}
 		for _, fk := range t.ForeignKeys {
 			if len(fk.Columns) > 1 {
-				return nil, fmt.Errorf(
+				return Schema{}, fmt.Errorf(
 					"table %s: composite FK %q (%d columns) is not supported in V0.1",
 					t.Name, fk.Name, len(fk.Columns),
 				)
@@ -70,7 +70,7 @@ func (d *postgresDriver) Introspect(ctx context.Context) (*Schema, error) {
 		out = append(out, *t)
 	}
 
-	return &Schema{Tables: out, Enums: enums}, nil
+	return Schema{Tables: out, Enums: enums}, nil
 }
 
 func pgKind(dataType, udtName string, enums map[string]struct{}) Kind {
