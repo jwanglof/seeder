@@ -48,6 +48,7 @@ var (
 		"京都市", "大阪市", "堺市", "神戸市", "岡山市", "広島市",
 		"北九州市", "福岡市", "熊本市", "鹿児島市", "那覇市",
 	}
+	jaPhonePrefixes = []string{"070", "080", "090"}
 )
 
 func lastNameJA(f *gofakeit.Faker) any  { return randomFrom(f, jaLastNames) }
@@ -79,6 +80,5 @@ func zipJA(f *gofakeit.Faker) any {
 // phoneJA returns a mobile-style number ("0[789]0-NNNN-NNNN"). Fixed-line
 // formats vary by prefecture, so we stick to mobile for predictability.
 func phoneJA(f *gofakeit.Faker) any {
-	prefixes := []string{"070", "080", "090"}
-	return fmt.Sprintf("%s-%04d-%04d", prefixes[f.Number(0, len(prefixes)-1)], f.Number(0, 9999), f.Number(0, 9999))
+	return fmt.Sprintf("%s-%04d-%04d", randomFrom(f, jaPhonePrefixes), f.Number(0, 9999), f.Number(0, 9999))
 }
