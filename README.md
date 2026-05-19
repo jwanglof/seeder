@@ -213,9 +213,8 @@ a random parent PK for each FK column.
 
 Postgres only. Single-row FKs only. No locale support (English data).
 No JSON/JSONB richer inference. Everything else — MySQL, locale,
-LLM-assisted text, per-table row counts (`--rows users=1000,orders=5000`),
-polymorphic / composite FKs, alternate output modes, existing-DB
-statistics sampling, raw `DEFAULT` parsing — is planned for v0.2.0.
+LLM-assisted text, polymorphic / composite FKs, alternate output modes,
+existing-DB statistics sampling, raw `DEFAULT` parsing — is planned for v0.2.0.
 
 ## Develop
 
