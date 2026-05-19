@@ -30,7 +30,7 @@ func TestFromKind(t *testing.T) {
 		{"timestamp", introspect.KindTimestamp, "time"},
 		{"json", introspect.KindJSON, "string"},
 		{"unknown_fallback", introspect.KindUnknown, "string"},
-		{"bytes_fallback", introspect.KindBytes, "string"},
+		{"bytes", introspect.KindBytes, "bytes"},
 	}
 
 	for _, tc := range cases {
@@ -120,6 +120,8 @@ func kindOf(v any) string {
 		return "float64"
 	case string:
 		return "string"
+	case []byte:
+		return "bytes"
 	case time.Time:
 		return "time"
 	default:

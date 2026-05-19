@@ -31,11 +31,23 @@ func FromKind(f *gofakeit.Faker, kind introspect.Kind, udtName string, enums map
 		}
 
 		return func() any { return labels[f.IntRange(0, len(labels)-1)] }
-	case introspect.KindBytes, introspect.KindUnknown:
+	case introspect.KindBytes:
+		return func() any { return randomBytes(f) }
+	case introspect.KindUnknown:
 		fallthrough
 	default:
 		return func() any { return f.Word() }
 	}
+}
+
+func randomBytes(f *gofakeit.Faker) []byte {
+	n := f.IntRange(4, 32)
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = f.Uint8()
+	}
+
+	return b
 }
 
 func jsonValue(f *gofakeit.Faker) string {

@@ -54,6 +54,11 @@ CREATE TABLE memberships (
     account_uid uuid   NOT NULL REFERENCES accounts(uid),
     role        text
 );
+
+CREATE TABLE blobs (
+    id      serial PRIMARY KEY,
+    payload bytea  NOT NULL
+);
 `
 
 //nolint:paralleltest,tparallel // mutates the public schema
@@ -91,8 +96,8 @@ func TestRun_Basic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert.Run: %v", err)
 	}
-	if len(stats) != 5 {
-		t.Fatalf("stats len = %d; want 5", len(stats))
+	if len(stats) != 6 {
+		t.Fatalf("stats len = %d; want 6", len(stats))
 	}
 	for _, s := range stats {
 		if s.Rows != 50 {
@@ -100,7 +105,7 @@ func TestRun_Basic(t *testing.T) {
 		}
 	}
 
-	for _, table := range []string{"users", "orders", "comments", "accounts", "memberships"} {
+	for _, table := range []string{"users", "orders", "comments", "accounts", "memberships", "blobs"} {
 		var count int
 		row := conn.QueryRow(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", pgx.Identifier{table}.Sanitize()))
 		if err := row.Scan(&count); err != nil {
@@ -138,6 +143,14 @@ func TestRun_Basic(t *testing.T) {
 	}
 	if orphans != 0 {
 		t.Errorf("memberships pointing at missing account_uid (UNIQUE non-PK FK) = %d; want 0", orphans)
+	}
+
+	var emptyBlobs int
+	if err := conn.QueryRow(ctx, "SELECT COUNT(*) FROM blobs WHERE payload IS NULL OR octet_length(payload) = 0").Scan(&emptyBlobs); err != nil {
+		t.Fatalf("blobs payload check: %v", err)
+	}
+	if emptyBlobs != 0 {
+		t.Errorf("blobs with NULL or empty bytea payload = %d; want 0", emptyBlobs)
 	}
 
 	var bad int
