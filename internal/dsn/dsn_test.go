@@ -88,9 +88,9 @@ func TestToMySQLDSN(t *testing.T) {
 			want: "root:p#ss@tcp(host:3306)/db",
 		},
 		{
-			name: "URL-encoded @ in password is escaped for driver",
+			name: "URL-encoded @ in password is passed through as last-@ split applies",
 			in:   "mysql://root:p%40ss@host:3306/db",
-			want: `root:p\@ss@tcp(host:3306)/db`,
+			want: "root:p@ss@tcp(host:3306)/db",
 		},
 	}
 	for _, tc := range cases {
