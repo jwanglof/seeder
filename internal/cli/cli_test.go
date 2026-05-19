@@ -507,6 +507,113 @@ func TestRun_UnknownLocale(t *testing.T) {
 	}
 }
 
+func TestEffectiveLocaleString(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		set    map[string]bool
+		cliArg string
+		cfg    config.Config
+		want   string
+	}{
+		{"cli wins when set", map[string]bool{"locale": true}, "en", config.Config{Locale: "ja"}, "en"},
+		{"yaml fills in when cli omitted", map[string]bool{}, "", config.Config{Locale: "ja"}, "ja"},
+		{"empty when both unset", map[string]bool{}, "", config.Config{}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := cli.EffectiveLocaleString(tc.set, tc.cliArg, tc.cfg); got != tc.want {
+				t.Errorf("got %q; want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateColumnGenerators(t *testing.T) {
+	t.Parallel()
+
+	ok := config.Config{
+		Version: 1,
+		Tables: map[string]config.TableConfig{
+			"users": {Columns: map[string]config.ColumnConfig{
+				"email": {Generator: "Email"},
+			}},
+		},
+	}
+	if msg := cli.ValidateColumnGenerators(ok); msg != "" {
+		t.Errorf("ValidateColumnGenerators(ok) = %q; want \"\"", msg)
+	}
+
+	bad := config.Config{
+		Version: 1,
+		Tables: map[string]config.TableConfig{
+			"users": {Columns: map[string]config.ColumnConfig{
+				"email": {Generator: "NotAGenerator"},
+			}},
+		},
+	}
+	msg := cli.ValidateColumnGenerators(bad)
+	if !strings.Contains(msg, "unknown generator") {
+		t.Errorf("ValidateColumnGenerators(bad) = %q; want unknown generator message", msg)
+	}
+	if !strings.Contains(msg, "users.email") {
+		t.Errorf("ValidateColumnGenerators(bad) = %q; want users.email reference", msg)
+	}
+}
+
+func TestUnknownConfigColumns(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Config{
+		Version: 1,
+		Tables: map[string]config.TableConfig{
+			"users": {Columns: map[string]config.ColumnConfig{
+				"email":  {Generator: "Email"},
+				"emial":  {Generator: "Email"}, // typo
+				"unknwn": {Value: 1},           // typo
+			}},
+		},
+	}
+	schema := introspect.Schema{Tables: []introspect.Table{
+		{Name: "users", Columns: []introspect.Column{{Name: "email"}, {Name: "id"}}},
+	}}
+
+	got := cli.UnknownConfigColumns(cfg, schema)
+	want := []string{"users.emial", "users.unknwn"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("UnknownConfigColumns = %v; want %v", got, want)
+	}
+}
+
+func TestColumnOverrides(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Config{
+		Version: 1,
+		Tables: map[string]config.TableConfig{
+			"users": {Columns: map[string]config.ColumnConfig{
+				"email":   {Generator: "Email"},
+				"country": {Value: "JP"},
+			}},
+			"audit_log": {Exclude: true}, // no Columns entries
+		},
+	}
+
+	got := cli.ColumnOverrides(cfg)
+	if _, ok := got["audit_log"]; ok {
+		t.Errorf("audit_log should not appear in overrides")
+	}
+	users := got["users"]
+	if users["email"].Generator != "Email" {
+		t.Errorf("users.email = %+v; want Generator=Email", users["email"])
+	}
+	if users["country"].Value != "JP" {
+		t.Errorf("users.country = %+v; want Value=JP", users["country"])
+	}
+}
+
 func ordersTable(nullable bool) introspect.Table {
 	return introspect.Table{
 		Name: "orders",

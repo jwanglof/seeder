@@ -110,6 +110,17 @@ func TestParse_Errors(t *testing.T) {
 			in:   "version: 1\ntables:\n  users:\n    rows: -5\n",
 			want: "tables.users.rows must be >= 0",
 		},
+		{
+			name: "column both generator and value",
+			in: "version: 1\ntables:\n  users:\n    columns:\n      email:\n" +
+				"        generator: Email\n        value: foo\n",
+			want: "cannot set both `generator` and `value`",
+		},
+		{
+			name: "column neither generator nor value",
+			in:   "version: 1\ntables:\n  users:\n    columns:\n      email: {}\n",
+			want: "one of `generator` or `value` must be set",
+		},
 	}
 
 	for _, tt := range tests {
@@ -123,6 +134,36 @@ func TestParse_Errors(t *testing.T) {
 				t.Errorf("Parse error = %q, want substring %q", err.Error(), tt.want)
 			}
 		})
+	}
+}
+
+func TestParse_ColumnOverrides(t *testing.T) {
+	t.Parallel()
+
+	in := []byte(`version: 1
+tables:
+  users:
+    columns:
+      email:
+        generator: Email
+      country:
+        value: JP
+`)
+	got, err := config.Parse(in)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	users, ok := got.Tables["users"]
+	if !ok {
+		t.Fatal("tables.users missing")
+	}
+	email, ok := users.Columns["email"]
+	if !ok || email.Generator != "Email" {
+		t.Errorf("email override = %+v; want Generator=Email", email)
+	}
+	country, ok := users.Columns["country"]
+	if !ok || country.Value != "JP" {
+		t.Errorf("country override = %+v; want Value=JP", country)
 	}
 }
 

@@ -1,3 +1,4 @@
+//nolint:gosmopolitan,testpackage // tests exercise the Japanese dictionary and need access to private generators.
 package infer
 
 import (
@@ -13,8 +14,6 @@ import (
 
 func TestLocaleJA_Generators(t *testing.T) {
 	t.Parallel()
-
-	f := gofakeit.New(42)
 
 	cases := []struct {
 		name string
@@ -34,6 +33,8 @@ func TestLocaleJA_Generators(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := gofakeit.New(42)
 			tc.want(t, tc.fn(f))
 		})
 	}

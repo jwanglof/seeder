@@ -18,13 +18,20 @@ seed: 42
 # TRUNCATE before insert (--truncate on the command line wins).
 truncate: false
 
-# Locale for inferred text values. Reserved for a future release; the
-# parser accepts the field today but it has no effect yet.
+# Locale for inferred text values (en, ja). --locale on the command line wins.
 locale: en
 
 # Per-table overrides.
 tables:
   users:
     rows: 10000
+    # Per-column overrides. Use `generator` to force a built-in (see
+    # `seeder --help` for the list) or `value` to pin a literal. Set
+    # exactly one of the two per column.
+    columns:
+      email:
+        generator: Email
+      country:
+        value: JP
   audit_log:
     exclude: true

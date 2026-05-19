@@ -13,6 +13,7 @@ import (
 
 	"github.com/mickamy/seeder/internal/config"
 	"github.com/mickamy/seeder/internal/exit"
+	"github.com/mickamy/seeder/internal/generator"
 	"github.com/mickamy/seeder/internal/infer"
 	"github.com/mickamy/seeder/internal/insert"
 	"github.com/mickamy/seeder/internal/introspect"
@@ -79,7 +80,13 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return exit.Usage
 	}
 
-	locale, err := infer.ParseLocale(*localeArg)
+	if msg := validateColumnGenerators(cfg); msg != "" {
+		fmt.Fprintln(stderr, "seeder: "+msg)
+
+		return exit.Usage
+	}
+
+	locale, err := infer.ParseLocale(effectiveLocaleString(set, *localeArg, cfg))
 	if err != nil {
 		fmt.Fprintf(stderr, "seeder: %v\n", err)
 
@@ -97,6 +104,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 	if unknown := unknownConfigTables(cfg, schema); len(unknown) > 0 {
 		fmt.Fprintf(stderr, "seeder: seeder.yaml references unknown table(s): %s\n", strings.Join(unknown, ", "))
+
+		return exit.Usage
+	}
+
+	if unknown := unknownConfigColumns(cfg, schema); len(unknown) > 0 {
+		fmt.Fprintf(stderr, "seeder: seeder.yaml references unknown column(s): %s\n", strings.Join(unknown, ", "))
 
 		return exit.Usage
 	}
@@ -212,12 +225,13 @@ func buildInsertOptions(
 	}
 
 	opts := insert.Options{
-		Rows:        defaultRows,
-		RowsByTable: rowsByTable,
-		Truncate:    effectiveTruncate,
-		DryRun:      dryRun,
-		Verbose:     verbose,
-		Locale:      locale,
+		Rows:            defaultRows,
+		RowsByTable:     rowsByTable,
+		Truncate:        effectiveTruncate,
+		DryRun:          dryRun,
+		Verbose:         verbose,
+		Locale:          locale,
+		ColumnOverrides: columnOverrides(cfg),
 	}
 	switch {
 	case set["seed"]:
@@ -327,6 +341,85 @@ func unknownConfigTables(cfg config.Config, schema introspect.Schema) []string {
 		}
 	}
 	slices.Sort(out)
+
+	return out
+}
+
+func unknownConfigColumns(cfg config.Config, schema introspect.Schema) []string {
+	if len(cfg.Tables) == 0 {
+		return nil
+	}
+	schemaCols := make(map[string]map[string]bool, len(schema.Tables))
+	for _, t := range schema.Tables {
+		m := make(map[string]bool, len(t.Columns))
+		for _, c := range t.Columns {
+			m[c.Name] = true
+		}
+		schemaCols[t.Name] = m
+	}
+	var out []string
+	for tname, tc := range cfg.Tables {
+		cols, ok := schemaCols[tname]
+		if !ok {
+			continue
+		}
+		for cname := range tc.Columns {
+			if !cols[cname] {
+				out = append(out, tname+"."+cname)
+			}
+		}
+	}
+	slices.Sort(out)
+
+	return out
+}
+
+func validateColumnGenerators(cfg config.Config) string {
+	var unknown []string
+	for tname, tc := range cfg.Tables {
+		for cname, cc := range tc.Columns {
+			if cc.Generator == "" {
+				continue
+			}
+			if !generator.IsKnown(cc.Generator) {
+				unknown = append(unknown, fmt.Sprintf("%s.%s = %q", tname, cname, cc.Generator))
+			}
+		}
+	}
+	if len(unknown) == 0 {
+		return ""
+	}
+	slices.Sort(unknown)
+
+	return fmt.Sprintf("seeder.yaml unknown generator(s): %s (known: %s)",
+		strings.Join(unknown, ", "), strings.Join(generator.KnownNames(), ", "))
+}
+
+func effectiveLocaleString(set map[string]bool, cliArg string, cfg config.Config) string {
+	if set["locale"] || cfg.Locale == "" {
+		return cliArg
+	}
+	return cfg.Locale
+}
+
+func columnOverrides(cfg config.Config) map[string]map[string]insert.ColumnOverride {
+	out := make(map[string]map[string]insert.ColumnOverride)
+	for tname, tc := range cfg.Tables {
+		if len(tc.Columns) == 0 {
+			continue
+		}
+		m := make(map[string]insert.ColumnOverride, len(tc.Columns))
+		for col, cc := range tc.Columns {
+			m[col] = insert.ColumnOverride{
+				Generator: cc.Generator,
+				Value:     cc.Value,
+			}
+		}
+		out[tname] = m
+	}
+	if len(out) == 0 {
+		return nil
+	}
 
 	return out
 }

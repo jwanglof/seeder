@@ -1,3 +1,4 @@
+//nolint:gosmopolitan // ja-locale dictionary intentionally embeds Japanese characters.
 package infer
 
 import (
@@ -81,4 +82,3 @@ func phoneJA(f *gofakeit.Faker) any {
 	prefixes := []string{"070", "080", "090"}
 	return fmt.Sprintf("%s-%04d-%04d", prefixes[f.Number(0, len(prefixes)-1)], f.Number(0, 9999), f.Number(0, 9999))
 }
-

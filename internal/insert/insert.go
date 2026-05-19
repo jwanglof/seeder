@@ -28,8 +28,14 @@ type Options struct {
 	DryRun      bool
 	Verbose     bool
 	// Seed is nil for a time-based RNG seed.
-	Seed   *uint64
-	Locale infer.Locale
+	Seed            *uint64
+	Locale          infer.Locale
+	ColumnOverrides map[string]map[string]ColumnOverride
+}
+
+type ColumnOverride struct {
+	Generator string
+	Value     any
 }
 
 type Stats struct {
@@ -132,7 +138,10 @@ type fkSpec struct {
 	col   string
 }
 
-func planColumns(t introspect.Table, faker *gofakeit.Faker, enums map[string][]string, locale infer.Locale) []colSpec {
+func planColumns(
+	t introspect.Table, faker *gofakeit.Faker, enums map[string][]string,
+	locale infer.Locale, overrides map[string]ColumnOverride,
+) ([]colSpec, error) {
 	cols := make([]colSpec, 0, len(t.Columns))
 	for _, c := range t.Columns {
 		if c.IsIdentity {
@@ -145,13 +154,28 @@ func planColumns(t introspect.Table, faker *gofakeit.Faker, enums map[string][]s
 		spec := colSpec{name: c.Name, nullable: c.Nullable}
 		if fk, ok := findFK(t, c.Name); ok {
 			spec.fk = fk
+		} else if gen, err := overrideGenerator(faker, overrides[c.Name]); err != nil {
+			return nil, fmt.Errorf("column %s: %w", c.Name, err)
+		} else if gen != nil {
+			spec.gen = gen
 		} else {
 			spec.gen = infer.Pick(faker, c, enums, locale)
 		}
 		cols = append(cols, spec)
 	}
 
-	return cols
+	return cols, nil
+}
+
+func overrideGenerator(faker *gofakeit.Faker, ov ColumnOverride) (generator.Func, error) {
+	switch {
+	case ov.Generator != "":
+		return generator.ByName(faker, ov.Generator) //nolint:wrapcheck // generator already returns a descriptive error
+	case ov.Value != nil:
+		v := ov.Value
+		return func() any { return v }, nil
+	}
+	return nil, nil //nolint:nilnil // no override; caller falls back to infer.Pick
 }
 
 // hasIntDefault returns true when an int-kind column is best left to the
@@ -193,10 +217,13 @@ func insertTable(
 	}
 
 	if opts.Verbose {
-		explainTable(t, enums, out)
+		explainTable(t, enums, opts.ColumnOverrides[t.Name], out)
 	}
 
-	cols := planColumns(t, faker, enums, opts.Locale)
+	cols, err := planColumns(t, faker, enums, opts.Locale, opts.ColumnOverrides[t.Name])
+	if err != nil {
+		return Stats{Table: t.Name}, err
+	}
 	if len(cols) == 0 {
 		if rows > 0 && !opts.DryRun {
 			return Stats{Table: t.Name}, errNoWritableColumns
@@ -276,14 +303,14 @@ func joinColNames(cols []colSpec) string {
 	return strings.Join(names, ", ")
 }
 
-func explainTable(t introspect.Table, enums map[string][]string, out io.Writer) {
+func explainTable(t introspect.Table, enums map[string][]string, overrides map[string]ColumnOverride, out io.Writer) {
 	fmt.Fprintf(out, "  %s\n", t.Name)
 	for _, c := range t.Columns {
-		fmt.Fprintf(out, "    %s\t%s\n", c.Name, explainColumn(t, c, enums))
+		fmt.Fprintf(out, "    %s\t%s\n", c.Name, explainColumn(t, c, enums, overrides[c.Name]))
 	}
 }
 
-func explainColumn(t introspect.Table, c introspect.Column, enums map[string][]string) string {
+func explainColumn(t introspect.Table, c introspect.Column, enums map[string][]string, ov ColumnOverride) string {
 	if c.IsIdentity {
 		return "skip: identity"
 	}
@@ -292,6 +319,12 @@ func explainColumn(t introspect.Table, c introspect.Column, enums map[string][]s
 	}
 	if fk, ok := findFK(t, c.Name); ok {
 		return fmt.Sprintf("fk: %s.%s", fk.table, fk.col)
+	}
+	switch {
+	case ov.Generator != "":
+		return "override: generator=" + ov.Generator
+	case ov.Value != nil:
+		return fmt.Sprintf("override: value=%v", ov.Value)
 	}
 
 	return infer.Explain(c, enums)

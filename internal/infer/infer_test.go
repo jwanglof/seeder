@@ -120,7 +120,7 @@ func TestPick_LocaleJA(t *testing.T) {
 		{"address", expectKana},
 		{"city", expectKana},
 		{"prefecture", expectKana},
-		{"country", matchers.Equal("日本")},
+		{"country", matchers.Equal("日本")}, //nolint:gosmopolitan // ja-locale assertion
 		{"state", expectKana},
 		{"zip", matchers.Match(regexp.MustCompile(`^\d{3}-\d{4}$`))},
 	}
