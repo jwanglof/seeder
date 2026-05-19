@@ -8,7 +8,7 @@ import (
 
 type Func func() any
 
-func FromKind(f *gofakeit.Faker, kind introspect.Kind, udtName string, enums map[string][]string) Func {
+func FromKind(f *gofakeit.Faker, kind introspect.Kind, enumValues []string) Func {
 	switch kind {
 	case introspect.KindBool:
 		return func() any { return f.Bool() }
@@ -25,12 +25,11 @@ func FromKind(f *gofakeit.Faker, kind introspect.Kind, udtName string, enums map
 	case introspect.KindJSON:
 		return func() any { return jsonValue(f) }
 	case introspect.KindEnum:
-		labels, ok := enums[udtName]
-		if !ok || len(labels) == 0 {
+		if len(enumValues) == 0 {
 			return func() any { return nil }
 		}
 
-		return func() any { return labels[f.IntRange(0, len(labels)-1)] }
+		return func() any { return enumValues[f.IntRange(0, len(enumValues)-1)] }
 	case introspect.KindBytes:
 		return func() any { return randomBytes(f) }
 	case introspect.KindUnknown:

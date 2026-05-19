@@ -59,11 +59,11 @@ func TestInsertTable_PerTableRowsOverride(t *testing.T) {
 	faker := gofakeit.New(42)
 	pool := make(map[string]map[string][]any)
 
-	usersStats, err := insert.InsertTable(t.Context(), drv, usersTable, opts, faker, nil, pool, nil, io.Discard)
+	usersStats, err := insert.InsertTable(t.Context(), drv, usersTable, opts, faker, pool, nil, io.Discard)
 	if err != nil {
 		t.Fatalf("insertTable users: %v", err)
 	}
-	ordersStats, err := insert.InsertTable(t.Context(), drv, ordersTable, opts, faker, nil, pool, nil, io.Discard)
+	ordersStats, err := insert.InsertTable(t.Context(), drv, ordersTable, opts, faker, pool, nil, io.Discard)
 	if err != nil {
 		t.Fatalf("insertTable orders: %v", err)
 	}

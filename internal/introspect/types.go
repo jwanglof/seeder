@@ -2,7 +2,6 @@ package introspect
 
 type Schema struct {
 	Tables []Table
-	Enums  []Enum
 }
 
 type Table struct {
@@ -18,9 +17,11 @@ type Column struct {
 	// (e.g., "integer", "USER-DEFINED" for Postgres; "int", "enum" for MySQL).
 	DataType string
 	// UDTName names the underlying user-defined type when relevant.
-	// On Postgres it matches an Enum.Name when DataType == "USER-DEFINED".
-	// On MySQL it is empty (enum labels are read directly into Enum).
-	UDTName    string
+	// On Postgres it matches the pg_type name when DataType == "USER-DEFINED".
+	// On MySQL it is empty (enum labels live in EnumValues).
+	UDTName string
+	// EnumValues holds the labels for an enum column; nil for non-enum columns.
+	EnumValues []string
 	Kind       Kind
 	Nullable   bool
 	HasDefault bool
@@ -32,11 +33,6 @@ type ForeignKey struct {
 	Columns           []string
 	ReferencedTable   string
 	ReferencedColumns []string
-}
-
-type Enum struct {
-	Name   string
-	Values []string
 }
 
 // Kind is a driver-agnostic classification of a column's value space, used
