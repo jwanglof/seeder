@@ -11,8 +11,6 @@ func TestNameRules_AllHaveLocaleEN(t *testing.T) {
 
 	for _, r := range nameRules {
 		if _, ok := r.gens[LocaleEN]; !ok {
-			t.Parallel()
-
 			t.Errorf("rule %q missing LocaleEN entry", r.label)
 		}
 	}
