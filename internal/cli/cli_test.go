@@ -506,8 +506,16 @@ func TestRun_ConfigErrors(t *testing.T) {
 func TestRun_UnknownLocale(t *testing.T) {
 	t.Parallel()
 
+	// Point at a temp config so the ambient cwd seeder.yaml (if any) cannot
+	// fail the test for unrelated reasons.
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "seeder.yaml")
+	if err := os.WriteFile(cfgPath, []byte("version: 1\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
 	var stdout, stderr strings.Builder
-	code := cli.Run([]string{"postgres://x", "--locale", "fr"}, &stdout, &stderr)
+	code := cli.Run([]string{"postgres://x", "--locale", "fr", "--config", cfgPath}, &stdout, &stderr)
 	if code != 2 {
 		t.Errorf("exit code = %d; want 2 (Usage)", code)
 	}
