@@ -41,13 +41,13 @@ CREATE TABLE comments (
 );
 `
 
-// Set SEEDER_TEST_DSN=postgres://... to run; otherwise the test is skipped.
+// Set SEEDER_TEST_DSN_POSTGRES=postgres://... to run; otherwise the test is skipped.
 //
 //nolint:paralleltest,tparallel // mutates the public schema; cannot run in parallel
 func TestIntrospect(t *testing.T) {
-	dsn := os.Getenv("SEEDER_TEST_DSN")
+	dsn := os.Getenv("SEEDER_TEST_DSN_POSTGRES")
 	if dsn == "" {
-		t.Skip("SEEDER_TEST_DSN not set")
+		t.Skip("SEEDER_TEST_DSN_POSTGRES not set")
 	}
 
 	ctx := t.Context()

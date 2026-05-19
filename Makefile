@@ -37,10 +37,12 @@ test:
 	go test ./... -race
 
 test-integration:
-	@if [ -z "$$SEEDER_TEST_DSN" ]; then \
-		echo "SEEDER_TEST_DSN is not set"; \
-		echo "Example: SEEDER_TEST_DSN=postgres://postgres:pass@localhost:5432/dev make test-integration"; \
-		echo "Tip:     'docker compose up -d postgres' boots a matching database."; \
+	@if [ -z "$$SEEDER_TEST_DSN_MYSQL" ] && [ -z "$$SEEDER_TEST_DSN_POSTGRES" ]; then \
+		echo "Set SEEDER_TEST_DSN_MYSQL and/or SEEDER_TEST_DSN_POSTGRES to run integration tests."; \
+		echo "Examples:"; \
+		echo "  SEEDER_TEST_DSN_MYSQL=mysql://root:pass@localhost:3306/dev?parseTime=true make test-integration"; \
+		echo "  SEEDER_TEST_DSN_POSTGRES=postgres://postgres:pass@localhost:5432/dev?sslmode=disable make test-integration"; \
+		echo "Tip: 'docker compose up -d' boots both databases."; \
 		exit 1; \
 	fi
 	go test -tags=integration ./... -race -count=1 -p 1
