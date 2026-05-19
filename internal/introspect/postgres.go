@@ -59,6 +59,14 @@ func (d *postgresDriver) Introspect(ctx context.Context) (*Schema, error) {
 		for i := range t.Columns {
 			t.Columns[i].Kind = pgKind(t.Columns[i].DataType, t.Columns[i].UDTName, enumNames)
 		}
+		for _, fk := range t.ForeignKeys {
+			if len(fk.Columns) > 1 {
+				return nil, fmt.Errorf(
+					"table %s: composite FK %q (%d columns) is not supported in V0.1",
+					t.Name, fk.Name, len(fk.Columns),
+				)
+			}
+		}
 		out = append(out, *t)
 	}
 
@@ -188,23 +196,26 @@ func (d *postgresDriver) fetchPrimaryKeys(ctx context.Context, tables map[string
 	return nil
 }
 
+// pg_constraint.conkey/confkey preserves composite FK column ordering
+// (information_schema joins by constraint name and Cartesian-products it).
 const pgForeignKeysQuery = `
 SELECT
-    tc.constraint_name,
-    kcu.table_name,
-    kcu.column_name,
-    ccu.table_name  AS foreign_table_name,
-    ccu.column_name AS foreign_column_name
-FROM information_schema.table_constraints tc
-JOIN information_schema.key_column_usage kcu
-  ON tc.constraint_name   = kcu.constraint_name
- AND tc.constraint_schema = kcu.constraint_schema
-JOIN information_schema.constraint_column_usage ccu
-  ON ccu.constraint_name   = tc.constraint_name
- AND ccu.constraint_schema = tc.constraint_schema
-WHERE tc.constraint_type = 'FOREIGN KEY'
-  AND tc.table_schema    = 'public'
-ORDER BY kcu.table_name, tc.constraint_name, kcu.ordinal_position
+    con.conname,
+    cl.relname  AS table_name,
+    att.attname AS column_name,
+    fcl.relname AS foreign_table_name,
+    fatt.attname AS foreign_column_name
+FROM pg_constraint con
+JOIN pg_class      cl   ON cl.oid  = con.conrelid
+JOIN pg_class      fcl  ON fcl.oid = con.confrelid
+JOIN pg_namespace  ns   ON ns.oid  = cl.relnamespace
+JOIN unnest(con.conkey, con.confkey) WITH ORDINALITY AS u(conkey, confkey, ord)
+  ON TRUE
+JOIN pg_attribute  att  ON att.attrelid  = con.conrelid  AND att.attnum  = u.conkey
+JOIN pg_attribute  fatt ON fatt.attrelid = con.confrelid AND fatt.attnum = u.confkey
+WHERE con.contype = 'f'
+  AND ns.nspname  = 'public'
+ORDER BY cl.relname, con.conname, u.ord
 `
 
 func (d *postgresDriver) fetchForeignKeys(ctx context.Context, tables map[string]*Table) error {
