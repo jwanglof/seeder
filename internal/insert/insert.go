@@ -2,6 +2,7 @@ package insert
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -12,6 +13,10 @@ import (
 	"github.com/mickamy/seeder/internal/generator"
 	"github.com/mickamy/seeder/internal/infer"
 	"github.com/mickamy/seeder/internal/introspect"
+)
+
+var errNoWritableColumns = errors.New(
+	"no writable columns (all columns are identity or int-with-default); cannot seed in V0.1",
 )
 
 type Options struct {
@@ -151,6 +156,9 @@ func insertTable(
 ) (Stats, error) {
 	cols := planColumns(t, faker, enums)
 	if len(cols) == 0 {
+		if opts.Rows > 0 && !opts.DryRun {
+			return Stats{Table: t.Name}, errNoWritableColumns
+		}
 		fmt.Fprintf(out, "  %s\tskipped (no writable columns)\n", t.Name)
 
 		return Stats{Table: t.Name}, nil
