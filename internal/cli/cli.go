@@ -66,6 +66,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return exit.Usage
 	}
 
+	if *seed < 0 {
+		fmt.Fprintf(stderr, "seeder: --seed must be >= 0, got %d\n", *seed)
+
+		return exit.Usage
+	}
+
 	if *tablesArg != "" && *excludeArg != "" {
 		fmt.Fprintln(stderr, "seeder: --tables and --exclude are mutually exclusive")
 
@@ -139,7 +145,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		Rows:     *rows,
 		Truncate: *truncate,
 		DryRun:   *dryRun,
-		Seed:     uint64(*seed), //nolint:gosec // intentional bit-for-bit int64->uint64 conversion for PRNG seed
+		Seed:     uint64(*seed),
 	}
 
 	start := time.Now()

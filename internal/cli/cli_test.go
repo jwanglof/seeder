@@ -197,6 +197,32 @@ func TestRun_MissingDSN(t *testing.T) {
 	}
 }
 
+func TestRun_NegativeSeed(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr strings.Builder
+	code := cli.Run([]string{"postgres://x", "--seed", "-1"}, &stdout, &stderr)
+	if code != 2 {
+		t.Errorf("exit code = %d; want 2 (Usage)", code)
+	}
+	if !strings.Contains(stderr.String(), "--seed must be >= 0") {
+		t.Errorf("stderr = %q; want negative seed message", stderr.String())
+	}
+}
+
+func TestRun_NegativeRows(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr strings.Builder
+	code := cli.Run([]string{"postgres://x", "--rows", "-1"}, &stdout, &stderr)
+	if code != 2 {
+		t.Errorf("exit code = %d; want 2 (Usage)", code)
+	}
+	if !strings.Contains(stderr.String(), "--rows must be >= 0") {
+		t.Errorf("stderr = %q; want negative rows message", stderr.String())
+	}
+}
+
 func ordersTable(nullable bool) introspect.Table {
 	return introspect.Table{
 		Name: "orders",
