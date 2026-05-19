@@ -147,12 +147,54 @@ func TestIntrospect_MySQL(t *testing.T) {
 }
 
 func applyMySQLSchema(ctx context.Context, db *sql.DB, schemaSQL string) error {
+	if err := resetMySQLTables(ctx, db); err != nil {
+		return err
+	}
 	for _, stmt := range strings.Split(schemaSQL, ";") {
 		stmt = strings.TrimSpace(stmt)
 		if stmt == "" {
 			continue
 		}
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// MySQL has no DROP SCHEMA ... CASCADE, so wipe every user table instead.
+func resetMySQLTables(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS=0"); err != nil {
+		return err
+	}
+	defer func() {
+		_, _ = db.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS=1")
+	}()
+
+	rows, err := db.QueryContext(ctx, "SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE()")
+	if err != nil {
+		return err
+	}
+	var tables []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			_ = rows.Close()
+
+			return err
+		}
+		tables = append(tables, name)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+
+		return err
+	}
+	_ = rows.Close()
+
+	for _, name := range tables {
+		if _, err := db.ExecContext(ctx, "DROP TABLE IF EXISTS `"+name+"`"); err != nil {
 			return err
 		}
 	}
