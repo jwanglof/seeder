@@ -142,18 +142,26 @@ func planColumns(
 		if c.IsIdentity {
 			continue
 		}
-		// A yaml override wins over the int-with-default skip: the user
+		// FK columns always go through the FK pool, even when they have a
+		// default or a yaml override (the override is intentionally ignored).
+		if fk, ok := findFK(t, c.Name); ok {
+			cols = append(cols, colSpec{name: c.Name, nullable: c.Nullable, fk: fk})
+			continue
+		}
+		ov := overrides[c.Name]
+		hasOverride := ov.Generator != "" || ov.Value != nil
+		// A yaml override wins over the int-with-default skip; the user
 		// asked for a specific value/generator, so honor it.
-		if _, hasOverride := overrides[c.Name]; !hasOverride && c.HasDefault && hasIntDefault(c.Kind) {
+		if !hasOverride && c.HasDefault && hasIntDefault(c.Kind) {
 			continue
 		}
 
 		spec := colSpec{name: c.Name, nullable: c.Nullable}
-		if fk, ok := findFK(t, c.Name); ok {
-			spec.fk = fk
-		} else if gen, err := overrideGenerator(faker, overrides[c.Name]); err != nil {
-			return nil, fmt.Errorf("column %s: %w", c.Name, err)
-		} else if gen != nil {
+		if hasOverride {
+			gen, err := overrideGenerator(faker, ov)
+			if err != nil {
+				return nil, fmt.Errorf("column %s: %w", c.Name, err)
+			}
 			spec.gen = gen
 		} else {
 			spec.gen = infer.Pick(faker, c, locale)
@@ -310,12 +318,12 @@ func explainColumn(t introspect.Table, c introspect.Column, ov ColumnOverride) s
 	if c.IsIdentity {
 		return "skip: identity"
 	}
+	if fk, ok := findFK(t, c.Name); ok {
+		return fmt.Sprintf("fk: %s.%s", fk.table, fk.col)
+	}
 	hasOverride := ov.Generator != "" || ov.Value != nil
 	if !hasOverride && c.HasDefault && hasIntDefault(c.Kind) {
 		return "skip: int with default"
-	}
-	if fk, ok := findFK(t, c.Name); ok {
-		return fmt.Sprintf("fk: %s.%s", fk.table, fk.col)
 	}
 	switch {
 	case ov.Generator != "":
