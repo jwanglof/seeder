@@ -1,7 +1,7 @@
 APP_NAME  = seeder
 BUILD_DIR = bin
 
-.PHONY: all build install uninstall clean test lint
+.PHONY: all build install uninstall clean test test-integration lint
 
 all: build
 
@@ -35,6 +35,15 @@ clean:
 
 test:
 	go test ./... -race
+
+test-integration:
+	@if [ -z "$$SEEDER_TEST_DSN" ]; then \
+		echo "SEEDER_TEST_DSN is not set"; \
+		echo "Example: SEEDER_TEST_DSN=postgres://postgres:pass@localhost:5432/dev make test-integration"; \
+		echo "Tip:     'docker compose up -d postgres' boots a matching database."; \
+		exit 1; \
+	fi
+	go test -tags=integration ./... -race -count=1 -p 1
 
 lint:
 	@command -v golangci-lint >/dev/null 2>&1 || { \
