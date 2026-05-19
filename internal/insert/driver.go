@@ -11,7 +11,7 @@ type Driver interface {
 	Close(ctx context.Context) error
 	Truncate(ctx context.Context, tables []string) error
 	BulkInsert(ctx context.Context, table string, columns []string, rows [][]any) (int64, error)
-	PrimaryKeyValues(ctx context.Context, table string, pkColumns []string) (map[string][]any, error)
+	ColumnValues(ctx context.Context, table string, columns []string) (map[string][]any, error)
 }
 
 func openDriver(ctx context.Context, dataSourceName string) (Driver, error) {

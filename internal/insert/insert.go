@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -63,6 +64,7 @@ func Run(
 	faker := gofakeit.New(seed)
 
 	pool := make(map[string]map[string][]any)
+	poolCols := fkPoolColumns(schema)
 
 	if opts.Truncate && !opts.DryRun {
 		if err := drv.Truncate(ctx, order); err != nil {
@@ -76,7 +78,7 @@ func Run(
 		if !ok {
 			return stats, fmt.Errorf("table %q not in schema", name)
 		}
-		s, err := insertTable(ctx, drv, &t, opts, faker, enums, pool, out)
+		s, err := insertTable(ctx, drv, &t, opts, faker, enums, pool, poolCols[name], out)
 		if err != nil {
 			return stats, fmt.Errorf("insert %s: %w", name, err)
 		}
@@ -84,6 +86,29 @@ func Run(
 	}
 
 	return stats, nil
+}
+
+func fkPoolColumns(schema *introspect.Schema) map[string][]string {
+	out := make(map[string][]string, len(schema.Tables))
+	add := func(table, col string) {
+		if !slices.Contains(out[table], col) {
+			out[table] = append(out[table], col)
+		}
+	}
+	for _, t := range schema.Tables {
+		for _, pk := range t.PrimaryKey {
+			add(t.Name, pk)
+		}
+	}
+	for _, t := range schema.Tables {
+		for _, fk := range t.ForeignKeys {
+			for _, col := range fk.ReferencedColumns {
+				add(fk.ReferencedTable, col)
+			}
+		}
+	}
+
+	return out
 }
 
 type colSpec struct {
@@ -152,6 +177,7 @@ func insertTable(
 	faker *gofakeit.Faker,
 	enums map[string][]string,
 	pool map[string]map[string][]any,
+	poolCols []string,
 	out io.Writer,
 ) (Stats, error) {
 	cols := planColumns(t, faker, enums)
@@ -199,12 +225,12 @@ func insertTable(
 	}
 	took := time.Since(start)
 
-	if len(t.PrimaryKey) > 0 {
-		pks, err := drv.PrimaryKeyValues(ctx, t.Name, t.PrimaryKey)
+	if len(poolCols) > 0 {
+		vals, err := drv.ColumnValues(ctx, t.Name, poolCols)
 		if err != nil {
-			return Stats{Table: t.Name, Rows: n, Took: took}, fmt.Errorf("primary keys: %w", err)
+			return Stats{Table: t.Name, Rows: n, Took: took}, fmt.Errorf("column values: %w", err)
 		}
-		pool[t.Name] = pks
+		pool[t.Name] = vals
 	}
 
 	fmt.Fprintf(out, "  %s\t%d rows (%s)\n", t.Name, n, took.Truncate(time.Microsecond))

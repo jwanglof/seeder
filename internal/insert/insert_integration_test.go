@@ -42,6 +42,18 @@ CREATE TABLE comments (
     order_id int    REFERENCES orders(id),
     body     text
 );
+
+CREATE TABLE accounts (
+    id   serial PRIMARY KEY,
+    uid  uuid   NOT NULL UNIQUE,
+    name text
+);
+
+CREATE TABLE memberships (
+    id          serial PRIMARY KEY,
+    account_uid uuid   NOT NULL REFERENCES accounts(uid),
+    role        text
+);
 `
 
 //nolint:paralleltest,tparallel // mutates the public schema
@@ -79,8 +91,8 @@ func TestRun_Basic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert.Run: %v", err)
 	}
-	if len(stats) != 3 {
-		t.Fatalf("stats len = %d; want 3", len(stats))
+	if len(stats) != 5 {
+		t.Fatalf("stats len = %d; want 5", len(stats))
 	}
 	for _, s := range stats {
 		if s.Rows != 50 {
@@ -88,7 +100,7 @@ func TestRun_Basic(t *testing.T) {
 		}
 	}
 
-	for _, table := range []string{"users", "orders", "comments"} {
+	for _, table := range []string{"users", "orders", "comments", "accounts", "memberships"} {
 		var count int
 		row := conn.QueryRow(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", pgx.Identifier{table}.Sanitize()))
 		if err := row.Scan(&count); err != nil {
@@ -119,6 +131,13 @@ func TestRun_Basic(t *testing.T) {
 	}
 	if orphans != 0 {
 		t.Errorf("comments with missing order_id = %d; want 0", orphans)
+	}
+
+	if err := conn.QueryRow(ctx, "SELECT COUNT(*) FROM memberships WHERE account_uid NOT IN (SELECT uid FROM accounts)").Scan(&orphans); err != nil {
+		t.Fatalf("memberships account_uid FK check: %v", err)
+	}
+	if orphans != 0 {
+		t.Errorf("memberships pointing at missing account_uid (UNIQUE non-PK FK) = %d; want 0", orphans)
 	}
 
 	var bad int

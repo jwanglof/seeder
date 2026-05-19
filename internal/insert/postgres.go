@@ -54,16 +54,16 @@ func (d *postgresDriver) BulkInsert(ctx context.Context, table string, columns [
 	return n, nil
 }
 
-func (d *postgresDriver) PrimaryKeyValues(
+func (d *postgresDriver) ColumnValues(
 	ctx context.Context,
 	table string,
-	pkColumns []string,
+	columns []string,
 ) (map[string][]any, error) {
-	cols := make([]string, len(pkColumns))
-	for i, pk := range pkColumns {
-		cols[i] = pgx.Identifier{pk}.Sanitize()
+	quoted := make([]string, len(columns))
+	for i, col := range columns {
+		quoted[i] = pgx.Identifier{col}.Sanitize()
 	}
-	stmt := fmt.Sprintf("SELECT %s FROM %s", strings.Join(cols, ", "), pgx.Identifier{table}.Sanitize())
+	stmt := fmt.Sprintf("SELECT %s FROM %s", strings.Join(quoted, ", "), pgx.Identifier{table}.Sanitize())
 
 	rows, err := d.conn.Query(ctx, stmt)
 	if err != nil {
@@ -71,14 +71,14 @@ func (d *postgresDriver) PrimaryKeyValues(
 	}
 	defer rows.Close()
 
-	out := make(map[string][]any, len(pkColumns))
+	out := make(map[string][]any, len(columns))
 	for rows.Next() {
 		vals, err := rows.Values()
 		if err != nil {
 			return nil, fmt.Errorf("values: %w", err)
 		}
-		for i, pk := range pkColumns {
-			out[pk] = append(out[pk], vals[i])
+		for i, col := range columns {
+			out[col] = append(out[col], vals[i])
 		}
 	}
 	if err := rows.Err(); err != nil {
