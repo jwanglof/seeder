@@ -21,6 +21,6 @@ func openDriver(ctx context.Context, dataSourceName string) (Driver, error) {
 	case "":
 		return nil, dsn.ErrMissingScheme
 	default:
-		return nil, fmt.Errorf("unsupported DSN scheme %q; supported: postgres", dsn.Scheme(dataSourceName))
+		return nil, fmt.Errorf("unsupported DSN scheme %q; supported: postgres, postgresql", dsn.Scheme(dataSourceName))
 	}
 }
