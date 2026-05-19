@@ -277,8 +277,9 @@ func orphanFKs(tables []introspect.Table) []orphanFK {
 				return c.Nullable
 			}
 		}
-
-		return true
+		// Unknown column: treat as NOT NULL so the orphan FK surfaces
+		// rather than silently passing the preflight.
+		return false
 	}
 
 	var out []orphanFK
