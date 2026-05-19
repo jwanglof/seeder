@@ -154,6 +154,11 @@ these columns, exclude the table or accept the override.
 > memory and bulk-insert throughput. `--exclude` the table or expect a
 > slower run; per-column overrides are planned for V0.2.
 
+> **Note on large `--rows`**: V0.1 generates every row in memory before
+> handing the batch to `COPY`. Hundreds of thousands of rows are fine on
+> a modern laptop, but `--rows 1,000,000+` can spike RAM into the GB range
+> (more with `jsonb`). Streamed / chunked inserts are planned for V0.2.
+
 ### Foreign keys
 
 Tables are inserted in dependency order: parents first, then children pick
