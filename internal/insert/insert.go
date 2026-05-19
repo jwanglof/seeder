@@ -21,10 +21,13 @@ var errNoWritableColumns = errors.New(
 )
 
 type Options struct {
-	Rows     int
-	Truncate bool
-	DryRun   bool
-	// Seed is nil for a time-based RNG seed; set to take a deterministic value.
+	// Rows is the default row count; tables listed in RowsByTable override it.
+	Rows        int
+	RowsByTable map[string]int
+	Truncate    bool
+	DryRun      bool
+	Verbose     bool
+	// Seed is nil for a time-based RNG seed.
 	Seed *uint64
 }
 
@@ -37,7 +40,7 @@ type Stats struct {
 func Run(
 	ctx context.Context,
 	dataSourceName string,
-	schema *introspect.Schema,
+	schema introspect.Schema,
 	order []string,
 	opts Options,
 	out io.Writer,
@@ -81,7 +84,7 @@ func Run(
 		if !ok {
 			return stats, fmt.Errorf("table %q not in schema", name)
 		}
-		s, err := insertTable(ctx, drv, &t, opts, faker, enums, pool, poolCols[name], out)
+		s, err := insertTable(ctx, drv, t, opts, faker, enums, pool, poolCols[name], out)
 		if err != nil {
 			return stats, fmt.Errorf("insert %s: %w", name, err)
 		}
@@ -91,7 +94,7 @@ func Run(
 	return stats, nil
 }
 
-func fkPoolColumns(schema *introspect.Schema) map[string][]string {
+func fkPoolColumns(schema introspect.Schema) map[string][]string {
 	out := make(map[string][]string, len(schema.Tables))
 	add := func(table, col string) {
 		if !slices.Contains(out[table], col) {
@@ -128,7 +131,7 @@ type fkSpec struct {
 	col   string
 }
 
-func planColumns(t *introspect.Table, faker *gofakeit.Faker, enums map[string][]string) []colSpec {
+func planColumns(t introspect.Table, faker *gofakeit.Faker, enums map[string][]string) []colSpec {
 	cols := make([]colSpec, 0, len(t.Columns))
 	for _, c := range t.Columns {
 		if c.IsIdentity {
@@ -160,7 +163,7 @@ func hasIntDefault(kind introspect.Kind) bool {
 	return kind == introspect.KindInt
 }
 
-func findFK(t *introspect.Table, column string) (fkSpec, bool) {
+func findFK(t introspect.Table, column string) (fkSpec, bool) {
 	for _, fk := range t.ForeignKeys {
 		for i, c := range fk.Columns {
 			if c == column {
@@ -175,7 +178,7 @@ func findFK(t *introspect.Table, column string) (fkSpec, bool) {
 func insertTable(
 	ctx context.Context,
 	drv Driver,
-	t *introspect.Table,
+	t introspect.Table,
 	opts Options,
 	faker *gofakeit.Faker,
 	enums map[string][]string,
@@ -183,9 +186,18 @@ func insertTable(
 	poolCols []string,
 	out io.Writer,
 ) (Stats, error) {
+	rows := opts.Rows
+	if r, ok := opts.RowsByTable[t.Name]; ok {
+		rows = r
+	}
+
+	if opts.Verbose {
+		explainTable(t, enums, out)
+	}
+
 	cols := planColumns(t, faker, enums)
 	if len(cols) == 0 {
-		if opts.Rows > 0 && !opts.DryRun {
+		if rows > 0 && !opts.DryRun {
 			return Stats{Table: t.Name}, errNoWritableColumns
 		}
 		fmt.Fprintf(out, "  %s\tskipped (no writable columns)\n", t.Name)
@@ -194,13 +206,13 @@ func insertTable(
 	}
 
 	if opts.DryRun {
-		fmt.Fprintf(out, "  %s\t%d rows (dry-run, columns: %s)\n", t.Name, opts.Rows, joinColNames(cols))
+		fmt.Fprintf(out, "  %s\t%d rows (dry-run, columns: %s)\n", t.Name, rows, joinColNames(cols))
 
-		return Stats{Table: t.Name, Rows: int64(opts.Rows)}, nil
+		return Stats{Table: t.Name, Rows: int64(rows)}, nil
 	}
 
-	data := make([][]any, 0, opts.Rows)
-	for range opts.Rows {
+	data := make([][]any, 0, rows)
+	for range rows {
 		row := make([]any, len(cols))
 		for j, c := range cols {
 			if c.gen == nil {
@@ -261,4 +273,25 @@ func joinColNames(cols []colSpec) string {
 	}
 
 	return strings.Join(names, ", ")
+}
+
+func explainTable(t introspect.Table, enums map[string][]string, out io.Writer) {
+	fmt.Fprintf(out, "  %s\n", t.Name)
+	for _, c := range t.Columns {
+		fmt.Fprintf(out, "    %s\t%s\n", c.Name, explainColumn(t, c, enums))
+	}
+}
+
+func explainColumn(t introspect.Table, c introspect.Column, enums map[string][]string) string {
+	if c.IsIdentity {
+		return "skip: identity"
+	}
+	if c.HasDefault && hasIntDefault(c.Kind) {
+		return "skip: int with default"
+	}
+	if fk, ok := findFK(t, c.Name); ok {
+		return fmt.Sprintf("fk: %s.%s", fk.table, fk.col)
+	}
+
+	return infer.Explain(c, enums)
 }
