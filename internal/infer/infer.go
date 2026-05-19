@@ -110,7 +110,7 @@ var nameRules = []nameRule{
 	},
 	{
 		label: "Country",
-		re:    regexp.MustCompile(`^country$|^prefecture$`),
+		re:    regexp.MustCompile(`^country$`),
 		kinds: stringKinds,
 		gens: map[Locale]localeGen{
 			LocaleEN: func(f *gofakeit.Faker) any { return f.Country() },
@@ -119,7 +119,7 @@ var nameRules = []nameRule{
 	},
 	{
 		label: "State",
-		re:    regexp.MustCompile(`^state$|^region$|^province$`),
+		re:    regexp.MustCompile(`^state$|^region$|^province$|^prefecture$`),
 		kinds: stringKinds,
 		gens: map[Locale]localeGen{
 			LocaleEN: func(f *gofakeit.Faker) any { return f.State() },
