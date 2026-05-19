@@ -82,6 +82,16 @@ func TestToMySQLDSN(t *testing.T) {
 			in:   "mysql://root:pass@localhost:3306/dev?parseTime=true",
 			want: "root:pass@tcp(localhost:3306)/dev?parseTime=true",
 		},
+		{
+			name: "URL-encoded special char in password",
+			in:   "mysql://root:p%23ss@host:3306/db",
+			want: "root:p#ss@tcp(host:3306)/db",
+		},
+		{
+			name: "URL-encoded @ in password is escaped for driver",
+			in:   "mysql://root:p%40ss@host:3306/db",
+			want: `root:p\@ss@tcp(host:3306)/db`,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

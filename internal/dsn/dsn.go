@@ -39,7 +39,17 @@ func ToMySQLDSN(dsn string) (string, error) {
 
 	var b strings.Builder
 	if u.User != nil {
-		b.WriteString(u.User.String())
+		// Use Username()/Password() (decoded) instead of String() (still
+		// URL-encoded), so credentials like "p%40ss" reach the driver as
+		// "p@ss" rather than the literal escape sequence.
+		b.WriteString(u.User.Username())
+		if pass, ok := u.User.Password(); ok {
+			b.WriteByte(':')
+			// `@` is the userinfo/host delimiter in go-sql-driver/mysql's DSN
+			// grammar; escape it so URI-decoded passwords containing `@`
+			// round-trip correctly.
+			b.WriteString(strings.ReplaceAll(pass, "@", `\@`))
+		}
 		b.WriteByte('@')
 	}
 	b.WriteString("tcp(")
