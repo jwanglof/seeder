@@ -420,6 +420,15 @@ func TestBuildInsertOptions_NoConfigNoSeed(t *testing.T) {
 	}
 }
 
+func TestBuildInsertOptions_LocaleWiresThrough(t *testing.T) {
+	t.Parallel()
+
+	opts := cli.BuildInsertOptions(1, false, 0, false, false, infer.LocaleJA, map[string]bool{}, config.Config{})
+	if opts.Locale != infer.LocaleJA {
+		t.Errorf("Locale = %q; want %q", opts.Locale, infer.LocaleJA)
+	}
+}
+
 func TestUnknownConfigTables(t *testing.T) {
 	t.Parallel()
 
