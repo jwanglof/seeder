@@ -338,6 +338,9 @@ func generateBatch(
 		for j, c := range cols {
 			if c.gen != nil && selfFKRefs[c.name] {
 				inBatch[c.name] = append(inBatch[c.name], row[j])
+				if len(inBatch[c.name]) > defaultPoolCapacity {
+					inBatch[c.name] = inBatch[c.name][len(inBatch[c.name])-defaultPoolCapacity:]
+				}
 			}
 		}
 		data = append(data, row)
