@@ -283,6 +283,8 @@ WHERE tc.constraint_type = 'UNIQUE'
 ORDER BY kcu.table_name, tc.constraint_name, kcu.ordinal_position
 `
 
+// Postgres constraint names are unique within a schema, so the constraint_name
+// alone is enough to group rows belonging to the same UNIQUE constraint.
 func (d *postgresDriver) fetchSingleColumnUniques(ctx context.Context) (map[string]map[string]bool, error) {
 	rows, err := d.conn.Query(ctx, pgUniquesQuery)
 	if err != nil {
