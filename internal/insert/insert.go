@@ -290,15 +290,26 @@ func planColumns(
 			continue
 		}
 
-		spec := colSpec{name: c.Name, nullable: c.Nullable}
+		// In output mode the DB does not assign identity / serial values, so
+		// the seeder has to pick them. Single-column primary keys are unique
+		// by definition; flag them so the generator picks a collision-aware
+		// strategy and the emitted SQL/NDJSON respects the PK constraint.
+		col := c
+		if keepDBManaged && !col.IsUnique &&
+			(col.IsIdentity || isSerialDefault(col.Default)) &&
+			isSingleColumnPK(t, col.Name) {
+			col.IsUnique = true
+		}
+
+		spec := colSpec{name: col.Name, nullable: col.Nullable}
 		if hasOverride {
 			gen, err := overrideGenerator(faker, ov)
 			if err != nil {
-				return nil, fmt.Errorf("column %s: %w", c.Name, err)
+				return nil, fmt.Errorf("column %s: %w", col.Name, err)
 			}
 			spec.gen = gen
 		} else {
-			spec.gen = infer.Pick(faker, c, locale)
+			spec.gen = infer.Pick(faker, col, locale)
 		}
 		cols = append(cols, spec)
 	}
@@ -323,6 +334,10 @@ func isSerialDefault(def *string) bool {
 	return def != nil && strings.HasPrefix(*def, "nextval(")
 }
 
+func isSingleColumnPK(t introspect.Table, name string) bool {
+	return len(t.PrimaryKey) == 1 && t.PrimaryKey[0] == name
+}
+
 func insertTable(
 	ctx context.Context,
 	drv Driver,
@@ -340,7 +355,7 @@ func insertTable(
 	}
 
 	if opts.Verbose {
-		explainTable(t, polys, opts.ColumnOverrides[t.Name], out)
+		explainTable(t, polys, opts.ColumnOverrides[t.Name], opts.OutputMode != "", out)
 	}
 
 	cols, err := planColumns(t, polys, faker, opts.Locale, opts.ColumnOverrides[t.Name], opts.OutputMode != "")
@@ -646,15 +661,30 @@ func joinColNames(cols []colSpec) string {
 	return strings.Join(names, ", ")
 }
 
-func explainTable(t introspect.Table, polys []PolymorphicSpec, overrides map[string]ColumnOverride, out io.Writer) {
+func explainTable(
+	t introspect.Table,
+	polys []PolymorphicSpec,
+	overrides map[string]ColumnOverride,
+	keepDBManaged bool,
+	out io.Writer,
+) {
 	fmt.Fprintf(out, "  %s\n", t.Name)
 	for _, c := range t.Columns {
-		fmt.Fprintf(out, "    %s\t%s\n", c.Name, explainColumn(t, polys, c, overrides[c.Name]))
+		fmt.Fprintf(out, "    %s\t%s\n", c.Name, explainColumn(t, polys, c, overrides[c.Name], keepDBManaged))
 	}
 }
 
-func explainColumn(t introspect.Table, polys []PolymorphicSpec, c introspect.Column, ov ColumnOverride) string {
+func explainColumn(
+	t introspect.Table,
+	polys []PolymorphicSpec,
+	c introspect.Column,
+	ov ColumnOverride,
+	keepDBManaged bool,
+) string {
 	if c.IsIdentity {
+		if keepDBManaged {
+			return "generated: identity (output mode)"
+		}
 		return "skip: identity"
 	}
 	for _, fk := range t.ForeignKeys {
@@ -674,6 +704,9 @@ func explainColumn(t introspect.Table, polys []PolymorphicSpec, c introspect.Col
 	}
 	hasOverride := ov.Generator != "" || ov.Value != nil
 	if !hasOverride && isSerialDefault(c.Default) {
+		if keepDBManaged {
+			return "generated: serial default (output mode)"
+		}
 		return "skip: serial default"
 	}
 	switch {

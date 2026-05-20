@@ -47,12 +47,9 @@ func (d *ndjsonOutputDriver) BulkInsert(
 		if err := enc.Encode(obj); err != nil {
 			return 0, fmt.Errorf("ndjson encode: %w", err)
 		}
-		stored := make(map[string]any, len(columns))
-		for i, c := range columns {
-			stored[c] = row[i]
-		}
-		d.written[table] = append(d.written[table], stored)
 	}
+
+	d.written[table] = appendBoundedRows(d.written[table], columns, rows, defaultPoolCapacity)
 
 	return int64(len(rows)), nil
 }

@@ -85,13 +85,7 @@ func (d *sqlOutputDriver) BulkInsert(_ context.Context, table string, columns []
 		}
 	}
 
-	for _, row := range rows {
-		m := make(map[string]any, len(columns))
-		for i, c := range columns {
-			m[c] = row[i]
-		}
-		d.written[table] = append(d.written[table], m)
-	}
+	d.written[table] = appendBoundedRows(d.written[table], columns, rows, defaultPoolCapacity)
 
 	return int64(len(rows)), nil
 }
@@ -113,6 +107,9 @@ func sqlLiteral(v any, dialect string) string {
 	}
 	switch x := v.(type) {
 	case string:
+		if dialect == "mysql" {
+			return "'" + mysqlEscapeString(x) + "'"
+		}
 		return "'" + strings.ReplaceAll(x, "'", "''") + "'"
 	case bool:
 		if dialect == "mysql" {
@@ -146,9 +143,9 @@ func sqlLiteral(v any, dialect string) string {
 	case uint64:
 		return strconv.FormatUint(x, 10)
 	case float32:
-		return strconvFloat(float64(x))
+		return strconv.FormatFloat(float64(x), 'g', -1, 32)
 	case float64:
-		return strconvFloat(x)
+		return strconv.FormatFloat(x, 'g', -1, 64)
 	case time.Time:
 		if dialect == "mysql" {
 			// MySQL DATETIME / TIMESTAMP literals have no zone; the server
@@ -168,6 +165,58 @@ func sqlLiteral(v any, dialect string) string {
 	return "'" + strings.ReplaceAll(fmt.Sprintf("%v", v), "'", "''") + "'"
 }
 
-func strconvFloat(f float64) string {
-	return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.6f", f), "0"), ".")
+// appendBoundedRows is the shared helper that output drivers use to retain
+// inserted rows in-memory (so FK / polymorphic pickers can read them back
+// via ColumnValues). It tail-trims to capacity, mirroring Pool's policy so
+// long output runs stay memory-bounded.
+func appendBoundedRows(
+	existing []map[string]any,
+	columns []string,
+	rows [][]any,
+	capacity int,
+) []map[string]any {
+	for _, row := range rows {
+		m := make(map[string]any, len(columns))
+		for i, c := range columns {
+			m[c] = row[i]
+		}
+		existing = append(existing, m)
+	}
+	if capacity > 0 && len(existing) > capacity {
+		existing = existing[len(existing)-capacity:]
+	}
+
+	return existing
+}
+
+// mysqlEscapeString applies MySQL string-literal escaping. ANSI_QUOTES /
+// NO_BACKSLASH_ESCAPES are not assumed; escape backslashes and the special
+// control bytes the server interprets unless that mode is set.
+func mysqlEscapeString(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := range len(s) {
+		switch s[i] {
+		case 0:
+			b.WriteString(`\0`)
+		case '\b':
+			b.WriteString(`\b`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		case 0x1A:
+			b.WriteString(`\Z`)
+		case '\'':
+			b.WriteString(`\'`)
+		case '\\':
+			b.WriteString(`\\`)
+		default:
+			b.WriteByte(s[i])
+		}
+	}
+
+	return b.String()
 }

@@ -70,7 +70,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 	dsn := fs.Arg(0)
 
-	msg := validateFlags(*rows, *seed, *batchSize, *tablesArg, *excludeArg, *outputArg, *streamArg, *rateArg)
+	msg := validateFlags(
+		*rows, *seed, *batchSize, *tablesArg, *excludeArg, *outputArg,
+		*streamArg, *rateArg, *dryRun,
+	)
 	if msg != "" {
 		fmt.Fprintln(stderr, "seeder: "+msg)
 
@@ -155,10 +158,19 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 	opts := buildInsertOptions(*rows, *batchSize, *truncate, *seed, *dryRun, *verbose, *outputArg, locale, set, cfg)
 	opts.Polymorphic = polymorphic
-	printHeader(stdout, order, countFKs(schema.Tables), opts)
+
+	// In --output modes, keep stdout exclusive to the emitted SQL/NDJSON so
+	// shell redirection (e.g., > seed.sql) yields a clean stream. Progress,
+	// headers, and the done line move to stderr.
+	progressOut := stdout
+	if opts.OutputMode != "" {
+		opts.OutputWriter = stdout
+		progressOut = stderr
+	}
+	printHeader(progressOut, order, countFKs(schema.Tables), opts)
 
 	if *streamArg {
-		err := insert.RunStream(ctx, dsn, schema, order, opts, insert.StreamOptions{Rate: *rateArg}, stdout)
+		err := insert.RunStream(ctx, dsn, schema, order, opts, insert.StreamOptions{Rate: *rateArg}, progressOut)
 		switch {
 		case err == nil, errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 			return exit.OK
@@ -170,7 +182,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	start := time.Now()
-	stats, err := insert.Run(ctx, dsn, schema, order, opts, stdout)
+	stats, err := insert.Run(ctx, dsn, schema, order, opts, progressOut)
 	if err != nil {
 		fmt.Fprintf(stderr, "seeder: %v\n", err)
 
@@ -182,7 +194,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	for _, s := range stats {
 		totalRows += s.Rows
 	}
-	fmt.Fprintf(stdout, "done:   %d row(s) in %s\n", totalRows, elapsed.Truncate(time.Millisecond))
+	fmt.Fprintf(progressOut, "done:   %d row(s) in %s\n", totalRows, elapsed.Truncate(time.Millisecond))
 
 	return exit.OK
 }
@@ -197,7 +209,7 @@ func flagSet(fs *flag.FlagSet) map[string]bool {
 func validateFlags(
 	rows int, seed int64, batchSize int,
 	tablesArg, excludeArg, outputArg string,
-	stream bool, rate int,
+	stream bool, rate int, dryRun bool,
 ) string {
 	switch {
 	case rows < 0:
@@ -216,6 +228,8 @@ func validateFlags(
 		return "--rate requires --stream"
 	case stream && outputArg != "":
 		return "--stream cannot combine with --output"
+	case stream && dryRun:
+		return "--stream cannot combine with --dry-run"
 	}
 
 	return ""
