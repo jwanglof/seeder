@@ -31,7 +31,9 @@ func (d *ndjsonOutputDriver) Truncate(_ context.Context, _ []string) error {
 	return nil
 }
 
-func (d *ndjsonOutputDriver) BulkInsert(_ context.Context, table string, columns []string, rows [][]any) (int64, error) {
+func (d *ndjsonOutputDriver) BulkInsert(
+	_ context.Context, table string, columns []string, rows [][]any,
+) (int64, error) {
 	if len(rows) == 0 {
 		return 0, nil
 	}

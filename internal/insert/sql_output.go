@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -66,7 +67,8 @@ func (d *sqlOutputDriver) BulkInsert(_ context.Context, table string, columns []
 	for i, c := range columns {
 		quoted[i] = quoteIdent(c)
 	}
-	if _, err := fmt.Fprintf(d.w, "INSERT INTO %s (%s) VALUES\n", quoteIdent(table), strings.Join(quoted, ", ")); err != nil {
+	header := fmt.Sprintf("INSERT INTO %s (%s) VALUES\n", quoteIdent(table), strings.Join(quoted, ", "))
+	if _, err := d.w.Write([]byte(header)); err != nil {
 		return 0, fmt.Errorf("write header: %w", err)
 	}
 	for i, row := range rows {
@@ -124,25 +126,25 @@ func sqlLiteral(v any, dialect string) string {
 		}
 		return "FALSE"
 	case int:
-		return fmt.Sprintf("%d", x)
+		return strconv.Itoa(x)
 	case int8:
-		return fmt.Sprintf("%d", x)
+		return strconv.Itoa(int(x))
 	case int16:
-		return fmt.Sprintf("%d", x)
+		return strconv.Itoa(int(x))
 	case int32:
-		return fmt.Sprintf("%d", x)
+		return strconv.Itoa(int(x))
 	case int64:
-		return fmt.Sprintf("%d", x)
+		return strconv.FormatInt(x, 10)
 	case uint:
-		return fmt.Sprintf("%d", x)
+		return strconv.FormatUint(uint64(x), 10)
 	case uint8:
-		return fmt.Sprintf("%d", x)
+		return strconv.FormatUint(uint64(x), 10)
 	case uint16:
-		return fmt.Sprintf("%d", x)
+		return strconv.FormatUint(uint64(x), 10)
 	case uint32:
-		return fmt.Sprintf("%d", x)
+		return strconv.FormatUint(uint64(x), 10)
 	case uint64:
-		return fmt.Sprintf("%d", x)
+		return strconv.FormatUint(x, 10)
 	case float32:
 		return strconvFloat(float64(x))
 	case float64:

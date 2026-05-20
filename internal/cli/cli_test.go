@@ -411,7 +411,10 @@ func TestBuildInsertOptions_TruncatePriority(t *testing.T) {
 func TestBuildInsertOptions_NoConfigNoSeed(t *testing.T) {
 	t.Parallel()
 
-	opts := cli.BuildInsertOptions(10, 1000, false, 0, false, false, "", infer.LocaleEN, map[string]bool{}, config.Config{})
+	opts := cli.BuildInsertOptions(
+		10, 1000, false, 0, false, false, "",
+		infer.LocaleEN, map[string]bool{}, config.Config{},
+	)
 	if opts.Seed != nil {
 		t.Errorf("Seed = %v; want nil (time-based)", opts.Seed)
 	}

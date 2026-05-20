@@ -42,10 +42,7 @@ func RunStream(
 		return fmt.Errorf("stream seed: %w", err)
 	}
 
-	perTable := stream.Rate / len(order)
-	if perTable < 1 {
-		perTable = 1
-	}
+	perTable := max(stream.Rate/len(order), 1)
 
 	loopOpts := opts
 	loopOpts.Truncate = false

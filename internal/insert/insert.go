@@ -418,8 +418,8 @@ type batchBuffer struct {
 	cap  int
 }
 
-func newBatchBuffer(refs map[string]bool, cap int) *batchBuffer {
-	return &batchBuffer{refs: refs, cap: cap}
+func newBatchBuffer(refs map[string]bool, capacity int) *batchBuffer {
+	return &batchBuffer{refs: refs, cap: capacity}
 }
 
 func (b *batchBuffer) push(row map[string]any) {

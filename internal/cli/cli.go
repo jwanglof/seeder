@@ -70,7 +70,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 	dsn := fs.Arg(0)
 
-	if msg := validateFlags(*rows, *seed, *batchSize, *tablesArg, *excludeArg, *outputArg, *streamArg, *rateArg); msg != "" {
+	msg := validateFlags(*rows, *seed, *batchSize, *tablesArg, *excludeArg, *outputArg, *streamArg, *rateArg)
+	if msg != "" {
 		fmt.Fprintln(stderr, "seeder: "+msg)
 
 		return exit.Usage
@@ -193,7 +194,11 @@ func flagSet(fs *flag.FlagSet) map[string]bool {
 	return out
 }
 
-func validateFlags(rows int, seed int64, batchSize int, tablesArg, excludeArg, outputArg string, stream bool, rate int) string {
+func validateFlags(
+	rows int, seed int64, batchSize int,
+	tablesArg, excludeArg, outputArg string,
+	stream bool, rate int,
+) string {
 	switch {
 	case rows < 0:
 		return fmt.Sprintf("--rows must be >= 0, got %d", rows)
@@ -478,7 +483,7 @@ func effectiveLocaleString(set map[string]bool, cliArg string, cfg config.Config
 // no PK aborts so the error surfaces before the insert loop.
 func resolvePolymorphic(cfg config.Config, schema introspect.Schema) (map[string][]insert.PolymorphicSpec, error) {
 	if len(cfg.Tables) == 0 {
-		return nil, nil
+		return nil, nil //nolint:nilnil // an absent polymorphic block is a non-error, signaled by a nil map
 	}
 	tablesByName := make(map[string]introspect.Table, len(schema.Tables))
 	for _, t := range schema.Tables {
@@ -522,7 +527,7 @@ func resolvePolymorphic(cfg config.Config, schema introspect.Schema) (map[string
 		}
 	}
 	if len(out) == 0 {
-		return nil, nil
+		return nil, nil //nolint:nilnil // an absent polymorphic block is a non-error, signaled by a nil map
 	}
 
 	return out, nil
