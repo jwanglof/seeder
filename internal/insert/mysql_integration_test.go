@@ -20,10 +20,6 @@ import (
 )
 
 const mysqlInsertSchemaSQL = `
-DROP TABLE IF EXISTS comments;
-DROP TABLE IF EXISTS orders;
-DROP TABLE IF EXISTS users;
-
 CREATE TABLE users (
     id         INT AUTO_INCREMENT PRIMARY KEY,
     email      VARCHAR(255) NOT NULL,
