@@ -146,6 +146,60 @@ func TestBuild_AllTablesIncluded(t *testing.T) {
 	}
 }
 
+func TestBuildWithDeps_ExtraDepOrdersBefore(t *testing.T) {
+	t.Parallel()
+
+	tables := []introspect.Table{
+		{Name: "comments"},
+		{Name: "posts"},
+		{Name: "articles"},
+	}
+	got, err := plan.BuildWithDeps(tables, map[string][]string{
+		"comments": {"posts", "articles"},
+	})
+	if err != nil {
+		t.Fatalf("BuildWithDeps: %v", err)
+	}
+	pos := make(map[string]int, len(got))
+	for i, n := range got {
+		pos[n] = i
+	}
+	if pos["posts"] >= pos["comments"] || pos["articles"] >= pos["comments"] {
+		t.Errorf("posts and articles must come before comments; got %v", got)
+	}
+}
+
+func TestBuildWithDeps_UnknownDepDropped(t *testing.T) {
+	t.Parallel()
+
+	tables := []introspect.Table{{Name: "a"}}
+	got, err := plan.BuildWithDeps(tables, map[string][]string{
+		"a": {"missing"},
+	})
+	if err != nil {
+		t.Fatalf("BuildWithDeps: %v", err)
+	}
+	if !reflect.DeepEqual(got, []string{"a"}) {
+		t.Errorf("order = %v; want [a] (unknown extra dep should be dropped)", got)
+	}
+}
+
+func TestBuildWithDeps_CycleViaExtra(t *testing.T) {
+	t.Parallel()
+
+	tables := []introspect.Table{{Name: "a"}, {Name: "b"}}
+	_, err := plan.BuildWithDeps(tables, map[string][]string{
+		"a": {"b"},
+		"b": {"a"},
+	})
+	if err == nil {
+		t.Fatal("BuildWithDeps returned nil error; want cycle error")
+	}
+	if !strings.Contains(err.Error(), "cyclic") {
+		t.Errorf("err = %v; want cyclic error", err)
+	}
+}
+
 func TestBuild_LongerCycle(t *testing.T) {
 	t.Parallel()
 
