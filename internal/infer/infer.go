@@ -2,7 +2,6 @@ package infer
 
 import (
 	"fmt"
-	"math"
 	"regexp"
 	"slices"
 	"strings"
@@ -15,8 +14,11 @@ import (
 
 type localeGen func(*gofakeit.Faker) any
 
-// Shared with uniqueWrap so the email shape stays valid under UNIQUE.
-var emailNameRe = regexp.MustCompile(`(^|_)email(s)?$`)
+// Shared with uniqueWrap so the email / image shapes stay valid under UNIQUE.
+var (
+	emailNameRe = regexp.MustCompile(`(^|_)email(s)?$`)
+	imageNameRe = regexp.MustCompile(`^avatar(_url)?$|^image(_url)?$|^photo(_url)?$|^picture(_url)?$|^thumbnail(_url)?$`)
+)
 
 type nameRule struct {
 	label string
@@ -89,7 +91,7 @@ var nameRules = []nameRule{
 	},
 	{
 		label: "Image",
-		re:    regexp.MustCompile(`^avatar(_url)?$|^image(_url)?$|^photo(_url)?$|^picture(_url)?$|^thumbnail(_url)?$`),
+		re:    imageNameRe,
 		kinds: stringKinds,
 		gens: map[Locale]localeGen{
 			LocaleEN: func(f *gofakeit.Faker) any {
@@ -244,6 +246,14 @@ func uniqueWrap(f *gofakeit.Faker, col introspect.Column, base generator.Func) g
 		if emailNameRe.MatchString(name) {
 			return func() any { return f.UUID() + "@example.com" }
 		}
+		if imageNameRe.MatchString(name) {
+			// Vary the picsum seed segment so the URL stays valid as
+			// `/seed/<uuid>/200/200` instead of being suffixed and breaking
+			// the path shape.
+			return func() any {
+				return fmt.Sprintf("https://picsum.photos/seed/%s/200/200", f.UUID())
+			}
+		}
 
 		return func() any {
 			v, ok := base().(string)
@@ -254,7 +264,17 @@ func uniqueWrap(f *gofakeit.Faker, col introspect.Column, base generator.Func) g
 			return v + "-" + f.UUID()
 		}
 	case introspect.KindInt:
-		return func() any { return f.Number(1, math.MaxInt32) }
+		// Counter-based to stay within narrower integer types (smallint /
+		// tinyint also map to KindInt); the random initial offset still
+		// avoids overlapping the lower end of the range across runs.
+		counter := f.Number(1, 1000)
+
+		return func() any {
+			v := counter
+			counter++
+
+			return v
+		}
 	case introspect.KindUnknown,
 		introspect.KindBool,
 		introspect.KindFloat,

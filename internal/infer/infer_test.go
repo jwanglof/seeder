@@ -140,6 +140,61 @@ func TestPick_UniqueString(t *testing.T) {
 	}
 }
 
+func TestPick_UniqueImage(t *testing.T) {
+	t.Parallel()
+
+	f := gofakeit.New(42)
+	col := introspect.Column{Name: "avatar_url", Kind: introspect.KindString, IsUnique: true}
+	gen := infer.Pick(f, col, infer.LocaleEN)
+
+	seen := make(map[string]bool, 1000)
+	for range 1000 {
+		v := gen()
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("unique image value = %T; want string", v)
+		}
+		if !strings.HasPrefix(s, "https://picsum.photos/seed/") || !strings.HasSuffix(s, "/200/200") {
+			t.Errorf("unique image %q does not look like picsum seed URL", s)
+		}
+		if seen[s] {
+			t.Fatalf("unique image collided after few samples: %s", s)
+		}
+		seen[s] = true
+	}
+}
+
+func TestPick_UniqueInt(t *testing.T) {
+	t.Parallel()
+
+	f := gofakeit.New(42)
+	col := introspect.Column{Name: "code", Kind: introspect.KindInt, IsUnique: true}
+	gen := infer.Pick(f, col, infer.LocaleEN)
+
+	const samples = 1000
+	seen := make(map[int]bool, samples)
+	maxSeen := 0
+	for range samples {
+		v := gen()
+		n, ok := v.(int)
+		if !ok {
+			t.Fatalf("unique int value = %T; want int", v)
+		}
+		if seen[n] {
+			t.Fatalf("unique int collided: %d", n)
+		}
+		seen[n] = true
+		if n > maxSeen {
+			maxSeen = n
+		}
+	}
+	// 1000 samples from an offset in [1, 1000] should fit in any signed
+	// 16-bit (smallint) column.
+	if maxSeen >= 32768 {
+		t.Errorf("unique int max = %d; want < 32768 (smallint-safe)", maxSeen)
+	}
+}
+
 func TestPick_EnumByKind(t *testing.T) {
 	t.Parallel()
 
