@@ -2,9 +2,13 @@ package insert
 
 const defaultPoolCapacity = 100_000
 
-// Pool stores parent column values that FK columns pick from. It caps the
-// per-(table, column) ring at Capacity to keep memory bounded under large
-// inserts; older values are dropped first.
+// Pool stores parent column values that FK columns pick from. Replace caps
+// each per-column slice at Capacity by keeping its tail, so memory stays
+// bounded under large inserts. The trimming is "keep the last N", not LRU:
+// callers (typically Driver.ColumnValues) decide the ordering of the input
+// slice.
+//
+// Construct via NewPool; the zero value is not usable.
 type Pool struct {
 	Capacity int
 	data     map[string]map[string][]any
@@ -22,9 +26,12 @@ func (p Pool) Values(table, col string) []any {
 	return p.data[table][col]
 }
 
-// Replace overwrites the per-column rings for table with vals, capping each at
-// Capacity (keeping the tail).
+// Replace overwrites the per-column slices for table with vals, keeping at
+// most the tail Capacity entries of each. Panics on a zero-value Pool.
 func (p Pool) Replace(table string, vals map[string][]any) {
+	if p.data == nil {
+		panic("insert: Pool must be constructed via NewPool")
+	}
 	if p.data[table] == nil {
 		p.data[table] = make(map[string][]any, len(vals))
 	}

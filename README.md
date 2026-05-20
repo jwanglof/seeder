@@ -238,7 +238,8 @@ single per-column generator can guarantee combined uniqueness.
 > `--batch-size` (default 1000) and flushes each chunk via `COPY` / multi-row
 > `INSERT` before building the next, so memory stays bounded even at
 > millions of rows. The parent-PK pool used for FK resolution is also capped
-> at 100k values per (table, column), with older entries dropped first.
+> at 100k values per (table, column); when refilled it keeps the tail of
+> what the driver returned (i.e., only the last 100k entries are kept).
 
 ### Foreign keys
 
