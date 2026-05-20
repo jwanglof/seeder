@@ -199,12 +199,20 @@ func fkPoolColumns(schema introspect.Schema, polys map[string][]PolymorphicSpec)
 	return out
 }
 
+// planColumns inspects t and returns the columns seeder will fill.
+//
+// keepDBManaged controls whether IDENTITY columns and Postgres `nextval(...)`
+// defaults are seeder-generated. In normal DB mode the DB owns those values
+// so we skip them; in output mode (--output sql / ndjson) there is no DB to
+// assign them, so we generate values ourselves to keep downstream FK / poly
+// pools populated.
 func planColumns(
 	t introspect.Table,
 	polys []PolymorphicSpec,
 	faker *gofakeit.Faker,
 	locale infer.Locale,
 	overrides map[string]ColumnOverride,
+	keepDBManaged bool,
 ) ([]colSpec, error) {
 	nullable := make(map[string]bool, len(t.Columns))
 	for _, c := range t.Columns {
@@ -256,7 +264,7 @@ func planColumns(
 
 	cols := make([]colSpec, 0, len(t.Columns))
 	for _, c := range t.Columns {
-		if c.IsIdentity {
+		if c.IsIdentity && !keepDBManaged {
 			continue
 		}
 		if spec, ok := fkByCol[c.Name]; ok {
@@ -278,7 +286,7 @@ func planColumns(
 
 		ov := overrides[c.Name]
 		hasOverride := ov.Generator != "" || ov.Value != nil
-		if !hasOverride && isSerialDefault(c.Default) {
+		if !hasOverride && isSerialDefault(c.Default) && !keepDBManaged {
 			continue
 		}
 
@@ -335,7 +343,7 @@ func insertTable(
 		explainTable(t, polys, opts.ColumnOverrides[t.Name], out)
 	}
 
-	cols, err := planColumns(t, polys, faker, opts.Locale, opts.ColumnOverrides[t.Name])
+	cols, err := planColumns(t, polys, faker, opts.Locale, opts.ColumnOverrides[t.Name], opts.OutputMode != "")
 	if err != nil {
 		return Stats{Table: t.Name}, err
 	}
@@ -597,6 +605,12 @@ func pickPolymorphic(
 	spec *polySpec,
 	tableName string,
 ) (polyResolved, error) {
+	if len(spec.targets) == 0 {
+		return polyResolved{}, fmt.Errorf(
+			"polymorphic spec on %s.(%s, %s) has no targets",
+			tableName, spec.typeCol, spec.idCol,
+		)
+	}
 	target := spec.targets[faker.IntRange(0, len(spec.targets)-1)]
 	row := pool.PickRow(faker, target.table)
 	if row == nil {

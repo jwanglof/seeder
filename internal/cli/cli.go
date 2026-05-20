@@ -494,7 +494,27 @@ func resolvePolymorphic(cfg config.Config, schema introspect.Schema) (map[string
 		if len(tc.Polymorphic) == 0 {
 			continue
 		}
+		owningTable, ok := tablesByName[tname]
+		if !ok {
+			// Unknown owning table is surfaced by unknownConfigTables before
+			// this runs; skip silently here so the earlier error is the one
+			// the user sees.
+			continue
+		}
+		owningCols := columnSet(owningTable)
 		for i, pc := range tc.Polymorphic {
+			if !owningCols[pc.TypeColumn] {
+				return nil, fmt.Errorf(
+					"seeder.yaml: tables.%s.polymorphic[%d].type_col: column %q not found in table %s",
+					tname, i, pc.TypeColumn, tname,
+				)
+			}
+			if !owningCols[pc.IDColumn] {
+				return nil, fmt.Errorf(
+					"seeder.yaml: tables.%s.polymorphic[%d].id_col: column %q not found in table %s",
+					tname, i, pc.IDColumn, tname,
+				)
+			}
 			spec := insert.PolymorphicSpec{
 				TypeColumn: pc.TypeColumn,
 				IDColumn:   pc.IDColumn,
@@ -516,6 +536,11 @@ func resolvePolymorphic(cfg config.Config, schema introspect.Schema) (map[string
 						)
 					}
 					idCol = targetTable.PrimaryKey[0]
+				} else if !columnSet(targetTable)[idCol] {
+					return nil, fmt.Errorf(
+						"seeder.yaml: tables.%s.polymorphic[%d].targets[%d].id_col: column %q not found in table %s",
+						tname, i, j, idCol, target.Table,
+					)
 				}
 				spec.Targets = append(spec.Targets, insert.PolymorphicTarget{
 					Table: target.Table,
@@ -531,6 +556,15 @@ func resolvePolymorphic(cfg config.Config, schema introspect.Schema) (map[string
 	}
 
 	return out, nil
+}
+
+func columnSet(t introspect.Table) map[string]bool {
+	out := make(map[string]bool, len(t.Columns))
+	for _, c := range t.Columns {
+		out[c.Name] = true
+	}
+
+	return out
 }
 
 func polymorphicDeps(polys map[string][]insert.PolymorphicSpec) map[string][]string {

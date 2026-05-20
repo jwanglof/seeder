@@ -19,9 +19,10 @@ type StreamOptions struct {
 
 // RunStream seeds the schema once (using opts) then keeps appending rows at
 // roughly StreamOptions.Rate per second until ctx is cancelled. Each second
-// the loop inserts ceil(Rate/len(order)) rows into every table, in order.
-// Returns ctx.Err() (or nil for nil ctx) once cancelled; insert errors are
-// returned immediately.
+// the loop inserts max(Rate/len(order), 1) rows into every table in order
+// (integer division; when Rate < len(order) the per-tick total exceeds the
+// configured budget — raise --rate above the table count for tighter control).
+// Returns ctx.Err() once cancelled; insert errors are returned immediately.
 func RunStream(
 	ctx context.Context,
 	dataSourceName string,

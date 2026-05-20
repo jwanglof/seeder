@@ -150,7 +150,13 @@ func sqlLiteral(v any, dialect string) string {
 	case float64:
 		return strconvFloat(x)
 	case time.Time:
-		return "'" + x.UTC().Format("2006-01-02 15:04:05") + "'"
+		if dialect == "mysql" {
+			// MySQL DATETIME / TIMESTAMP literals have no zone; the server
+			// applies time_zone to the value at insert time.
+			return "'" + x.UTC().Format("2006-01-02 15:04:05.999999") + "'"
+		}
+		// Postgres accepts ISO 8601 with offset; emit an unambiguous UTC instant.
+		return "'" + x.UTC().Format(time.RFC3339Nano) + "'"
 	case []byte:
 		if dialect == "mysql" {
 			return "X'" + hex.EncodeToString(x) + "'"
