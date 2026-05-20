@@ -4,9 +4,15 @@ package insert_test
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -604,6 +610,277 @@ func TestRun_CompositeFK(t *testing.T) {
 	}
 	if mismatches != 0 {
 		t.Errorf("tasks where project_code matches but project_region does not = %d; want 0", mismatches)
+	}
+}
+
+const polymorphicSchemaSQL = `
+DROP SCHEMA public CASCADE;
+CREATE SCHEMA public;
+
+CREATE TABLE posts (
+    id    serial PRIMARY KEY,
+    title text NOT NULL
+);
+
+CREATE TABLE articles (
+    id    serial PRIMARY KEY,
+    title text NOT NULL
+);
+
+CREATE TABLE comments (
+    id               serial PRIMARY KEY,
+    commentable_type text NOT NULL,
+    commentable_id   int  NOT NULL,
+    body             text NOT NULL
+);
+`
+
+//nolint:paralleltest,tparallel // mutates the public schema
+func TestRun_PolymorphicFK(t *testing.T) {
+	dsn := os.Getenv("SEEDER_TEST_DSN_POSTGRES")
+	if dsn == "" {
+		t.Skip("SEEDER_TEST_DSN_POSTGRES not set")
+	}
+
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+
+	if _, err := conn.Exec(ctx, polymorphicSchemaSQL); err != nil {
+		t.Fatalf("apply schema: %v", err)
+	}
+	schema, err := introspect.Do(ctx, dsn)
+	if err != nil {
+		t.Fatalf("introspect: %v", err)
+	}
+	order, err := plan.BuildWithDeps(schema.Tables, map[string][]string{
+		"comments": {"posts", "articles"},
+	})
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	opts := insert.Options{
+		Rows: 30,
+		Seed: new(uint64(42)),
+		Polymorphic: map[string][]insert.PolymorphicSpec{
+			"comments": {
+				{
+					TypeColumn: "commentable_type",
+					IDColumn:   "commentable_id",
+					Targets: []insert.PolymorphicTarget{
+						{Table: "posts", Type: "Post", IDCol: "id"},
+						{Table: "articles", Type: "Article", IDCol: "id"},
+					},
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	if _, err := insert.Run(ctx, dsn, schema, order, opts, &buf); err != nil {
+		t.Fatalf("insert.Run: %v", err)
+	}
+
+	for _, typ := range []string{"Post", "Article"} {
+		var n int
+		if err := conn.QueryRow(ctx, "SELECT COUNT(*) FROM comments WHERE commentable_type = $1", typ).Scan(&n); err != nil {
+			t.Fatalf("count comments by type %s: %v", typ, err)
+		}
+		if n == 0 {
+			t.Errorf("no comments resolved to %s; type discriminator distribution looks degenerate", typ)
+		}
+	}
+
+	var orphans int
+	if err := conn.QueryRow(ctx, `
+        SELECT COUNT(*) FROM comments c
+        WHERE (c.commentable_type = 'Post'    AND NOT EXISTS (SELECT 1 FROM posts    p WHERE p.id = c.commentable_id))
+           OR (c.commentable_type = 'Article' AND NOT EXISTS (SELECT 1 FROM articles a WHERE a.id = c.commentable_id))
+    `).Scan(&orphans); err != nil {
+		t.Fatalf("polymorphic orphan check: %v", err)
+	}
+	if orphans != 0 {
+		t.Errorf("comments pointing at missing target = %d; want 0", orphans)
+	}
+
+	var unknown int
+	if err := conn.QueryRow(ctx, "SELECT COUNT(*) FROM comments WHERE commentable_type NOT IN ('Post','Article')").Scan(&unknown); err != nil {
+		t.Fatalf("unknown type check: %v", err)
+	}
+	if unknown != 0 {
+		t.Errorf("comments with unknown commentable_type = %d", unknown)
+	}
+}
+
+//nolint:paralleltest,tparallel // mutates the public schema
+func TestRun_OutputSQL(t *testing.T) {
+	dsn := os.Getenv("SEEDER_TEST_DSN_POSTGRES")
+	if dsn == "" {
+		t.Skip("SEEDER_TEST_DSN_POSTGRES not set")
+	}
+
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+
+	if _, err := conn.Exec(ctx, schemaSQL); err != nil {
+		t.Fatalf("apply schema: %v", err)
+	}
+	schema, err := introspect.Do(ctx, dsn)
+	if err != nil {
+		t.Fatalf("introspect: %v", err)
+	}
+	order, err := plan.Build(schema.Tables)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	var sqlBuf bytes.Buffer
+	opts := insert.Options{
+		Rows:         5,
+		Seed:         new(uint64(42)),
+		OutputMode:   "sql",
+		OutputWriter: &sqlBuf,
+	}
+	if _, err := insert.Run(ctx, dsn, schema, order, opts, io.Discard); err != nil {
+		t.Fatalf("insert.Run output=sql: %v", err)
+	}
+
+	out := sqlBuf.String()
+	for _, table := range []string{"users", "orders", "comments"} {
+		if !strings.Contains(out, "INSERT INTO \""+table+"\"") {
+			t.Errorf("output missing INSERT for %s; got:\n%s", table, out)
+		}
+	}
+
+	var rowCount int
+	if err := conn.QueryRow(ctx, "SELECT COUNT(*) FROM users").Scan(&rowCount); err != nil {
+		t.Fatalf("count users: %v", err)
+	}
+	if rowCount != 0 {
+		t.Errorf("--output=sql should not write to DB; users count = %d; want 0", rowCount)
+	}
+}
+
+//nolint:paralleltest,tparallel // mutates the public schema
+func TestRun_OutputNDJSON(t *testing.T) {
+	dsn := os.Getenv("SEEDER_TEST_DSN_POSTGRES")
+	if dsn == "" {
+		t.Skip("SEEDER_TEST_DSN_POSTGRES not set")
+	}
+
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+
+	if _, err := conn.Exec(ctx, schemaSQL); err != nil {
+		t.Fatalf("apply schema: %v", err)
+	}
+	schema, err := introspect.Do(ctx, dsn)
+	if err != nil {
+		t.Fatalf("introspect: %v", err)
+	}
+	order, err := plan.Build(schema.Tables)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	var ndBuf bytes.Buffer
+	opts := insert.Options{
+		Rows:         5,
+		Seed:         new(uint64(42)),
+		OutputMode:   "ndjson",
+		OutputWriter: &ndBuf,
+	}
+	if _, err := insert.Run(ctx, dsn, schema, order, opts, io.Discard); err != nil {
+		t.Fatalf("insert.Run output=ndjson: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimRight(ndBuf.String(), "\n"), "\n")
+	if len(lines) < 5 {
+		t.Fatalf("ndjson lines = %d; want at least 5", len(lines))
+	}
+	seenTables := make(map[string]bool)
+	for _, line := range lines {
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(line), &obj); err != nil {
+			t.Fatalf("invalid ndjson line %q: %v", line, err)
+		}
+		tableVal, ok := obj["_table"].(string)
+		if !ok || tableVal == "" {
+			t.Errorf("ndjson line missing _table: %s", line)
+		}
+		seenTables[tableVal] = true
+	}
+	for _, table := range []string{"users", "orders"} {
+		if !seenTables[table] {
+			t.Errorf("ndjson missing %s table emission", table)
+		}
+	}
+
+	var rowCount int
+	if err := conn.QueryRow(ctx, "SELECT COUNT(*) FROM users").Scan(&rowCount); err != nil {
+		t.Fatalf("count users: %v", err)
+	}
+	if rowCount != 0 {
+		t.Errorf("--output=ndjson should not write to DB; users count = %d; want 0", rowCount)
+	}
+}
+
+//nolint:paralleltest,tparallel // mutates the public schema
+func TestRunStream(t *testing.T) {
+	dsn := os.Getenv("SEEDER_TEST_DSN_POSTGRES")
+	if dsn == "" {
+		t.Skip("SEEDER_TEST_DSN_POSTGRES not set")
+	}
+
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+
+	if _, err := conn.Exec(ctx, schemaSQL); err != nil {
+		t.Fatalf("apply schema: %v", err)
+	}
+	schema, err := introspect.Do(ctx, dsn)
+	if err != nil {
+		t.Fatalf("introspect: %v", err)
+	}
+	order, err := plan.Build(schema.Tables)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	streamCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+	defer cancel()
+
+	var buf bytes.Buffer
+	err = insert.RunStream(streamCtx, dsn, schema, order, insert.Options{
+		Rows: 5,
+		Seed: new(uint64(42)),
+	}, insert.StreamOptions{Rate: 30}, &buf)
+	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("RunStream: %v", err)
+	}
+
+	var totalUsers int
+	if err := conn.QueryRow(ctx, "SELECT COUNT(*) FROM users").Scan(&totalUsers); err != nil {
+		t.Fatalf("count users: %v", err)
+	}
+	if totalUsers <= 5 {
+		t.Errorf("RunStream appended no rows: users = %d; want > 5 (initial seed)", totalUsers)
 	}
 }
 

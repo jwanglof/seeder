@@ -315,7 +315,7 @@ func TestBuildInsertOptions_RowsPriority(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			opts := cli.BuildInsertOptions(tc.rows, 1000, false, 0, false, false, infer.LocaleEN, tc.set, cfg)
+			opts := cli.BuildInsertOptions(tc.rows, 1000, false, 0, false, false, "", infer.LocaleEN, tc.set, cfg)
 			if opts.Rows != tc.wantDefaultRows {
 				t.Errorf("Rows = %d; want %d", opts.Rows, tc.wantDefaultRows)
 			}
@@ -344,7 +344,7 @@ func TestBuildInsertOptions_SeedPriority(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			opts := cli.BuildInsertOptions(1, 1000, false, tc.seed, false, false, infer.LocaleEN, tc.set, cfg)
+			opts := cli.BuildInsertOptions(1, 1000, false, tc.seed, false, false, "", infer.LocaleEN, tc.set, cfg)
 			if opts.Seed == nil {
 				t.Fatal("Seed = nil; want non-nil")
 			}
@@ -400,7 +400,7 @@ func TestBuildInsertOptions_TruncatePriority(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			opts := cli.BuildInsertOptions(1, 1000, tc.cliTruncate, 0, false, false, infer.LocaleEN, tc.set, tc.cfg)
+			opts := cli.BuildInsertOptions(1, 1000, tc.cliTruncate, 0, false, false, "", infer.LocaleEN, tc.set, tc.cfg)
 			if opts.Truncate != tc.want {
 				t.Errorf("Truncate = %v; want %v", opts.Truncate, tc.want)
 			}
@@ -411,7 +411,7 @@ func TestBuildInsertOptions_TruncatePriority(t *testing.T) {
 func TestBuildInsertOptions_NoConfigNoSeed(t *testing.T) {
 	t.Parallel()
 
-	opts := cli.BuildInsertOptions(10, 1000, false, 0, false, false, infer.LocaleEN, map[string]bool{}, config.Config{})
+	opts := cli.BuildInsertOptions(10, 1000, false, 0, false, false, "", infer.LocaleEN, map[string]bool{}, config.Config{})
 	if opts.Seed != nil {
 		t.Errorf("Seed = %v; want nil (time-based)", opts.Seed)
 	}
@@ -423,7 +423,7 @@ func TestBuildInsertOptions_NoConfigNoSeed(t *testing.T) {
 func TestBuildInsertOptions_LocaleWiresThrough(t *testing.T) {
 	t.Parallel()
 
-	opts := cli.BuildInsertOptions(1, 1000, false, 0, false, false, infer.LocaleJA, map[string]bool{}, config.Config{})
+	opts := cli.BuildInsertOptions(1, 1000, false, 0, false, false, "", infer.LocaleJA, map[string]bool{}, config.Config{})
 	if opts.Locale != infer.LocaleJA {
 		t.Errorf("Locale = %q; want %q", opts.Locale, infer.LocaleJA)
 	}

@@ -87,11 +87,11 @@ func TestInsertTable_PerTableRowsOverride(t *testing.T) {
 	faker := gofakeit.New(42)
 	pool := insert.NewPool(0)
 
-	usersStats, err := insert.InsertTable(t.Context(), drv, usersTable, opts, faker, pool, nil, io.Discard)
+	usersStats, err := insert.InsertTable(t.Context(), drv, usersTable, nil, opts, faker, pool, nil, io.Discard)
 	if err != nil {
 		t.Fatalf("insertTable users: %v", err)
 	}
-	ordersStats, err := insert.InsertTable(t.Context(), drv, ordersTable, opts, faker, pool, nil, io.Discard)
+	ordersStats, err := insert.InsertTable(t.Context(), drv, ordersTable, nil, opts, faker, pool, nil, io.Discard)
 	if err != nil {
 		t.Fatalf("insertTable orders: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestPlanColumns_GeneratorOverrideAppliesToNonFKColumn(t *testing.T) {
 		"email": {Generator: "Email"},
 	}
 
-	cols, err := insert.PlanColumns(table, gofakeit.New(42), infer.LocaleEN, overrides)
+	cols, err := insert.PlanColumns(table, nil, gofakeit.New(42), infer.LocaleEN, overrides)
 	if err != nil {
 		t.Fatalf("PlanColumns: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestPlanColumns_OverrideIgnoredForFKColumn(t *testing.T) {
 		"user_id": {Value: 999},
 	}
 
-	cols, err := insert.PlanColumns(table, gofakeit.New(42), infer.LocaleEN, overrides)
+	cols, err := insert.PlanColumns(table, nil, gofakeit.New(42), infer.LocaleEN, overrides)
 	if err != nil {
 		t.Fatalf("PlanColumns: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestPlanColumns_ValueOverrideStableAcrossCalls(t *testing.T) {
 		"country": {Value: "JP"},
 	}
 
-	cols, err := insert.PlanColumns(table, gofakeit.New(42), infer.LocaleEN, overrides)
+	cols, err := insert.PlanColumns(table, nil, gofakeit.New(42), infer.LocaleEN, overrides)
 	if err != nil {
 		t.Fatalf("PlanColumns: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestPlanColumns_OverrideBeatsSerialDefault(t *testing.T) {
 		"rank": {Value: 7},
 	}
 
-	cols, err := insert.PlanColumns(table, gofakeit.New(42), infer.LocaleEN, overrides)
+	cols, err := insert.PlanColumns(table, nil, gofakeit.New(42), infer.LocaleEN, overrides)
 	if err != nil {
 		t.Fatalf("PlanColumns: %v", err)
 	}
