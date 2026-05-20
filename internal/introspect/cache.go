@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 )
 
 const cacheVersion = 1
@@ -42,13 +43,16 @@ func LoadCache(path string) (Schema, bool, error) {
 }
 
 // SaveCache writes the schema to path via a tmp file and rename, so a crash
-// mid-write does not leave a half-written cache.
+// mid-write does not leave a half-written cache. os.CreateTemp avoids
+// collisions with stale `.tmp` files or with a concurrent seeder run.
 func SaveCache(path string, schema Schema) error {
-	tmp := path + ".tmp"
-	f, err := os.Create(tmp) //nolint:gosec // path comes from --cache, a user-chosen file
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	f, err := os.CreateTemp(dir, base+".*.tmp")
 	if err != nil {
 		return fmt.Errorf("create cache: %w", err)
 	}
+	tmp := f.Name()
 	closed := false
 	defer func() {
 		if !closed {
@@ -65,10 +69,14 @@ func SaveCache(path string, schema Schema) error {
 		return fmt.Errorf("encode cache: %w", err)
 	}
 	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+
 		return fmt.Errorf("close cache: %w", err)
 	}
 	closed = true
 	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+
 		return fmt.Errorf("rename cache: %w", err)
 	}
 
