@@ -297,7 +297,7 @@ func resetMySQLTables(ctx context.Context, db *sql.DB) error {
 		_, _ = db.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS=1")
 	}()
 
-	rows, err := db.QueryContext(ctx, "SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE()")
+	rows, err := db.QueryContext(ctx, "SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE'")
 	if err != nil {
 		return err
 	}
@@ -319,10 +319,14 @@ func resetMySQLTables(ctx context.Context, db *sql.DB) error {
 	_ = rows.Close()
 
 	for _, name := range tables {
-		if _, err := db.ExecContext(ctx, "DROP TABLE IF EXISTS `"+name+"`"); err != nil {
+		if _, err := db.ExecContext(ctx, "DROP TABLE IF EXISTS "+quoteMySQLIdent(name)); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func quoteMySQLIdent(name string) string {
+	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }
