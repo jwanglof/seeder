@@ -377,6 +377,73 @@ func TestRun_UniqueColumnsAreDistinct(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest,tparallel // mutates the public schema
+func TestRun_BatchSizeIsDeterministic(t *testing.T) {
+	dsn := os.Getenv("SEEDER_TEST_DSN_POSTGRES")
+	if dsn == "" {
+		t.Skip("SEEDER_TEST_DSN_POSTGRES not set")
+	}
+
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+
+	runWith := func(batchSize int) []string {
+		t.Helper()
+		if _, err := conn.Exec(ctx, uniqueSchemaSQL); err != nil {
+			t.Fatalf("apply schema: %v", err)
+		}
+		schema, err := introspect.Do(ctx, dsn)
+		if err != nil {
+			t.Fatalf("introspect: %v", err)
+		}
+		order, err := plan.Build(schema.Tables)
+		if err != nil {
+			t.Fatalf("plan: %v", err)
+		}
+		var buf bytes.Buffer
+		if _, err := insert.Run(ctx, dsn, schema, order, insert.Options{
+			Rows:      20,
+			BatchSize: batchSize,
+			Seed:      new(uint64(42)),
+		}, &buf); err != nil {
+			t.Fatalf("insert.Run batch=%d: %v", batchSize, err)
+		}
+		rows, err := conn.Query(ctx, "SELECT slug FROM tags ORDER BY id")
+		if err != nil {
+			t.Fatalf("select slugs: %v", err)
+		}
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var s string
+			if err := rows.Scan(&s); err != nil {
+				t.Fatalf("scan: %v", err)
+			}
+			out = append(out, s)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("rows: %v", err)
+		}
+
+		return out
+	}
+
+	single := runWith(1)
+	multi := runWith(10)
+	if len(single) != len(multi) {
+		t.Fatalf("len mismatch: %d vs %d", len(single), len(multi))
+	}
+	for i := range single {
+		if single[i] != multi[i] {
+			t.Errorf("row %d: %q vs %q (batch-size must not affect output for seeded RNG)", i, single[i], multi[i])
+		}
+	}
+}
+
 const selfFKSchemaSQL = `
 DROP SCHEMA public CASCADE;
 CREATE SCHEMA public;

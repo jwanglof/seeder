@@ -85,7 +85,7 @@ func TestInsertTable_PerTableRowsOverride(t *testing.T) {
 
 	drv := &mockDriver{}
 	faker := gofakeit.New(42)
-	pool := make(map[string]map[string][]any)
+	pool := insert.NewPool(0)
 
 	usersStats, err := insert.InsertTable(t.Context(), drv, usersTable, opts, faker, pool, nil, io.Discard)
 	if err != nil {
