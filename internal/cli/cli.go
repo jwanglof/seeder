@@ -34,6 +34,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	fs.Usage = func() { PrintUsage(stderr) }
 
 	batchSize := fs.Int("batch-size", 1000, "rows generated per INSERT batch")
+	cachePath := fs.String("cache", "", "load/save introspected schema to this file")
 	configPath := fs.String("config", "", "path to seeder.yaml (default: auto-detect in CWD)")
 	dryRun := fs.Bool("dry-run", false, "print plan, do not insert")
 	excludeArg := fs.String("exclude", "", "comma-separated tables to skip (mutually exclusive with --tables)")
@@ -96,7 +97,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 	ctx := context.Background()
 
-	schema, err := introspect.Do(ctx, dsn)
+	schema, err := loadOrIntrospect(ctx, dsn, *cachePath, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "seeder: introspect: %v\n", err)
 
@@ -279,12 +280,39 @@ func printHeader(w io.Writer, order []string, fkCount int, opts insert.Options) 
 
 var valueFlags = map[string]bool{
 	"batch-size": true,
+	"cache":      true,
 	"config":     true,
 	"exclude":    true,
 	"locale":     true,
 	"rows":       true,
 	"seed":       true,
 	"tables":     true,
+}
+
+// loadOrIntrospect reads schema from cache when available, otherwise introspects
+// the DB and persists the result. Cache failures degrade to plain introspect.
+func loadOrIntrospect(ctx context.Context, dsn, cachePath string, stderr io.Writer) (introspect.Schema, error) {
+	if cachePath != "" {
+		s, ok, err := introspect.LoadCache(cachePath)
+		if err != nil {
+			fmt.Fprintf(stderr, "seeder: cache: %v (ignoring)\n", err)
+		}
+		if ok {
+			return s, nil
+		}
+	}
+
+	s, err := introspect.Do(ctx, dsn)
+	if err != nil {
+		return introspect.Schema{}, err //nolint:wrapcheck // caller adds the seeder: introspect: prefix
+	}
+	if cachePath != "" {
+		if err := introspect.SaveCache(cachePath, s); err != nil {
+			fmt.Fprintf(stderr, "seeder: cache save: %v (continuing)\n", err)
+		}
+	}
+
+	return s, nil
 }
 
 // configAt loads the config at path; an empty path auto-detects seeder.yaml in the CWD.
@@ -596,6 +624,7 @@ func PrintUsage(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "FLAGS:")
 	fmt.Fprintln(w, "  --batch-size int Rows generated per INSERT batch (default: 1000)")
+	fmt.Fprintln(w, "  --cache <file>   Load/save introspected schema to this file (delete to invalidate)")
 	fmt.Fprintln(w, "  --config <file>  Path to seeder.yaml (default: auto-detect ./seeder.yaml)")
 	fmt.Fprintln(w, "  --dry-run        Print plan, do not insert")
 	fmt.Fprintln(w, "  --exclude string Comma-separated tables to skip (cannot combine with --tables)")
