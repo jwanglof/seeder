@@ -15,7 +15,7 @@ import (
 
 	"github.com/mickamy/seeder/internal/dsn"
 	"github.com/mickamy/seeder/internal/introspect"
-	"github.com/mickamy/seeder/internal/testutil"
+	"github.com/mickamy/seeder/internal/tsql"
 )
 
 const mysqlSchemaSQL = `
@@ -148,7 +148,7 @@ func TestIntrospect_MySQL(t *testing.T) {
 }
 
 func applyMySQLSchema(ctx context.Context, db *sql.DB, schemaSQL string) error {
-	if err := testutil.ResetMySQLTables(ctx, db); err != nil {
+	if err := tsql.ResetMySQLTables(ctx, db); err != nil {
 		return err
 	}
 	for _, stmt := range strings.Split(schemaSQL, ";") {

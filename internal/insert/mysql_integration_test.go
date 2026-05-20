@@ -16,7 +16,7 @@ import (
 	"github.com/mickamy/seeder/internal/insert"
 	"github.com/mickamy/seeder/internal/introspect"
 	"github.com/mickamy/seeder/internal/plan"
-	"github.com/mickamy/seeder/internal/testutil"
+	"github.com/mickamy/seeder/internal/tsql"
 )
 
 const mysqlInsertSchemaSQL = `
@@ -273,7 +273,7 @@ func TestRun_MySQL_Truncate(t *testing.T) {
 }
 
 func applyMySQLInsertSchema(ctx context.Context, db *sql.DB, schemaSQL string) error {
-	if err := testutil.ResetMySQLTables(ctx, db); err != nil {
+	if err := tsql.ResetMySQLTables(ctx, db); err != nil {
 		return err
 	}
 	for _, stmt := range strings.Split(schemaSQL, ";") {
