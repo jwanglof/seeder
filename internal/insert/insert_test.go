@@ -39,21 +39,22 @@ func TestIsSerialDefault(t *testing.T) {
 
 	cases := []struct {
 		name string
-		in   string
+		in   *string
 		want bool
 	}{
-		{"empty", "", false},
-		{"literal zero", "0", false},
-		{"current_timestamp", "current_timestamp", false},
-		{"string literal", "'foo'::text", false},
-		{"nextval regclass", "nextval('users_id_seq'::regclass)", true},
-		{"nextval bare", "nextval('seq')", true},
+		{"nil (no default)", nil, false},
+		{"empty default", new(""), false},
+		{"literal zero", new("0"), false},
+		{"current_timestamp", new("current_timestamp"), false},
+		{"string literal", new("'foo'::text"), false},
+		{"nextval regclass", new("nextval('users_id_seq'::regclass)"), true},
+		{"nextval bare", new("nextval('seq')"), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			if got := insert.IsSerialDefault(tc.in); got != tc.want {
-				t.Errorf("IsSerialDefault(%q) = %v; want %v", tc.in, got, tc.want)
+				t.Errorf("IsSerialDefault(%v) = %v; want %v", tc.in, got, tc.want)
 			}
 		})
 	}
@@ -200,7 +201,7 @@ func TestPlanColumns_OverrideBeatsSerialDefault(t *testing.T) {
 	table := introspect.Table{
 		Name: "users",
 		Columns: []introspect.Column{
-			{Name: "rank", Kind: introspect.KindInt, Default: "nextval('rank_seq'::regclass)"},
+			{Name: "rank", Kind: introspect.KindInt, Default: new("nextval('rank_seq'::regclass)")},
 		},
 	}
 	overrides := map[string]insert.ColumnOverride{

@@ -2,6 +2,7 @@ package introspect
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"maps"
 	"slices"
@@ -119,7 +120,7 @@ SELECT
     c.data_type,
     c.udt_name,
     c.is_nullable,
-    COALESCE(c.column_default, '') AS column_default,
+    c.column_default,
     c.is_identity
 FROM information_schema.tables t
 JOIN information_schema.columns c
@@ -140,8 +141,9 @@ func (d *postgresDriver) fetchTablesWithColumns(ctx context.Context) (map[string
 	tables := make(map[string]*Table)
 	for rows.Next() {
 		var (
-			tname, cname, dataType, udtName    string
-			isNullable, colDefault, isIdentity string
+			tname, cname, dataType, udtName string
+			isNullable, isIdentity          string
+			colDefault                      sql.NullString
 		)
 		if err := rows.Scan(&tname, &cname, &dataType, &udtName, &isNullable, &colDefault, &isIdentity); err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
@@ -151,12 +153,17 @@ func (d *postgresDriver) fetchTablesWithColumns(ctx context.Context) (map[string
 			t = &Table{Name: tname}
 			tables[tname] = t
 		}
+		var defaultVal *string
+		if colDefault.Valid {
+			s := colDefault.String
+			defaultVal = &s
+		}
 		t.Columns = append(t.Columns, Column{
 			Name:       cname,
 			DataType:   dataType,
 			UDTName:    udtName,
 			Nullable:   isNullable == "YES",
-			Default:    colDefault,
+			Default:    defaultVal,
 			IsIdentity: isIdentity == "YES",
 		})
 	}

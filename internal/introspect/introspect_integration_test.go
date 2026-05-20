@@ -90,8 +90,8 @@ func TestIntrospect(t *testing.T) {
 	}
 
 	idCol := findColumn(t, users, "id")
-	if !strings.HasPrefix(idCol.Default, "nextval(") {
-		t.Errorf("users.id Default = %q; want prefix nextval(", idCol.Default)
+	if idCol.Default == nil || !strings.HasPrefix(*idCol.Default, "nextval(") {
+		t.Errorf("users.id Default = %v; want non-nil with prefix nextval(", idCol.Default)
 	}
 	nameCol := findColumn(t, users, "name")
 	if !nameCol.Nullable {

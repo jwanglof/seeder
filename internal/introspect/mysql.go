@@ -90,7 +90,7 @@ SELECT
     c.data_type,
     c.column_type,
     c.is_nullable,
-    COALESCE(c.column_default, '') AS column_default,
+    c.column_default,
     c.extra
 FROM information_schema.tables t
 JOIN information_schema.columns c
@@ -112,7 +112,8 @@ func (d *mySQLDriver) fetchTablesWithColumns(ctx context.Context) (map[string]*T
 	for rows.Next() {
 		var (
 			tname, cname, dataType, columnType string
-			isNullable, colDefault, extra      string
+			isNullable, extra                  string
+			colDefault                         sql.NullString
 		)
 		if err := rows.Scan(&tname, &cname, &dataType, &columnType, &isNullable, &colDefault, &extra); err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
@@ -123,13 +124,18 @@ func (d *mySQLDriver) fetchTablesWithColumns(ctx context.Context) (map[string]*T
 			tables[tname] = t
 		}
 		kind, enumValues := mySQLKind(dataType, columnType)
+		var defaultVal *string
+		if colDefault.Valid {
+			s := colDefault.String
+			defaultVal = &s
+		}
 		t.Columns = append(t.Columns, Column{
 			Name:       cname,
 			DataType:   dataType,
 			EnumValues: enumValues,
 			Kind:       kind,
 			Nullable:   isNullable == "YES",
-			Default:    colDefault,
+			Default:    defaultVal,
 			IsIdentity: strings.Contains(strings.ToLower(extra), "auto_increment"),
 		})
 	}

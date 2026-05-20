@@ -185,8 +185,8 @@ func overrideGenerator(faker *gofakeit.Faker, ov ColumnOverride) (generator.Func
 
 // isSerialDefault leaves Postgres `nextval(...)` defaults to the DB so the
 // sequence stays authoritative; other defaults are intentionally overridden.
-func isSerialDefault(def string) bool {
-	return strings.HasPrefix(def, "nextval(")
+func isSerialDefault(def *string) bool {
+	return def != nil && strings.HasPrefix(*def, "nextval(")
 }
 
 func findFK(t introspect.Table, column string) (fkSpec, bool) {
