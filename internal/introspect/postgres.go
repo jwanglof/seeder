@@ -261,7 +261,7 @@ func (d *postgresDriver) fetchForeignKeys(ctx context.Context, tables map[string
 	return nil
 }
 
-// Returns every UNIQUE column; callers filter to single-column constraints.
+// Returns every UNIQUE column; fetchSingleColumnUniques drops composite ones.
 const pgUniquesQuery = `
 SELECT
     tc.constraint_name,
