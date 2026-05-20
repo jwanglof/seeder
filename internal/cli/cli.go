@@ -33,6 +33,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	fs.Usage = func() { PrintUsage(stderr) }
 
+	batchSize := fs.Int("batch-size", 1000, "rows generated per INSERT batch")
+	cachePath := fs.String("cache", "", "load/save introspected schema to this file")
 	configPath := fs.String("config", "", "path to seeder.yaml (default: auto-detect in CWD)")
 	dryRun := fs.Bool("dry-run", false, "print plan, do not insert")
 	excludeArg := fs.String("exclude", "", "comma-separated tables to skip (mutually exclusive with --tables)")
@@ -65,7 +67,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 	dsn := fs.Arg(0)
 
-	if msg := validateFlags(*rows, *seed, *tablesArg, *excludeArg); msg != "" {
+	if msg := validateFlags(*rows, *seed, *batchSize, *tablesArg, *excludeArg); msg != "" {
 		fmt.Fprintln(stderr, "seeder: "+msg)
 
 		return exit.Usage
@@ -95,7 +97,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 	ctx := context.Background()
 
-	schema, err := introspect.Do(ctx, dsn)
+	schema, err := loadOrIntrospect(ctx, dsn, *cachePath, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "seeder: introspect: %v\n", err)
 
@@ -140,7 +142,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return exit.Error
 	}
 
-	opts := buildInsertOptions(*rows, *truncate, *seed, *dryRun, *verbose, locale, set, cfg)
+	opts := buildInsertOptions(*rows, *batchSize, *truncate, *seed, *dryRun, *verbose, locale, set, cfg)
 	printHeader(stdout, order, countFKs(schema.Tables), opts)
 
 	start := time.Now()
@@ -168,12 +170,14 @@ func flagSet(fs *flag.FlagSet) map[string]bool {
 	return out
 }
 
-func validateFlags(rows int, seed int64, tablesArg, excludeArg string) string {
+func validateFlags(rows int, seed int64, batchSize int, tablesArg, excludeArg string) string {
 	switch {
 	case rows < 0:
 		return fmt.Sprintf("--rows must be >= 0, got %d", rows)
 	case seed < 0:
 		return fmt.Sprintf("--seed must be >= 0, got %d", seed)
+	case batchSize <= 0:
+		return fmt.Sprintf("--batch-size must be > 0, got %d", batchSize)
 	case tablesArg != "" && excludeArg != "":
 		return "--tables and --exclude are mutually exclusive"
 	}
@@ -205,7 +209,7 @@ func applyTableFilters(
 }
 
 func buildInsertOptions(
-	rows int, truncate bool, seed int64, dryRun, verbose bool,
+	rows, batchSize int, truncate bool, seed int64, dryRun, verbose bool,
 	locale infer.Locale,
 	set map[string]bool, cfg config.Config,
 ) insert.Options {
@@ -227,6 +231,7 @@ func buildInsertOptions(
 	opts := insert.Options{
 		Rows:            defaultRows,
 		RowsByTable:     rowsByTable,
+		BatchSize:       batchSize,
 		Truncate:        effectiveTruncate,
 		DryRun:          dryRun,
 		Verbose:         verbose,
@@ -274,12 +279,40 @@ func printHeader(w io.Writer, order []string, fkCount int, opts insert.Options) 
 }
 
 var valueFlags = map[string]bool{
-	"rows":    true,
-	"tables":  true,
-	"exclude": true,
-	"seed":    true,
-	"config":  true,
-	"locale":  true,
+	"batch-size": true,
+	"cache":      true,
+	"config":     true,
+	"exclude":    true,
+	"locale":     true,
+	"rows":       true,
+	"seed":       true,
+	"tables":     true,
+}
+
+// loadOrIntrospect reads schema from cache when available, otherwise introspects
+// the DB and persists the result. Cache failures degrade to plain introspect.
+func loadOrIntrospect(ctx context.Context, dsn, cachePath string, stderr io.Writer) (introspect.Schema, error) {
+	if cachePath != "" {
+		s, ok, err := introspect.LoadCache(cachePath)
+		if err != nil {
+			fmt.Fprintf(stderr, "seeder: cache: %v (ignoring)\n", err)
+		}
+		if ok {
+			return s, nil
+		}
+	}
+
+	s, err := introspect.Do(ctx, dsn)
+	if err != nil {
+		return introspect.Schema{}, err //nolint:wrapcheck // caller adds the seeder: introspect: prefix
+	}
+	if cachePath != "" {
+		if err := introspect.SaveCache(cachePath, s); err != nil {
+			fmt.Fprintf(stderr, "seeder: cache save: %v (continuing)\n", err)
+		}
+	}
+
+	return s, nil
 }
 
 // configAt loads the config at path; an empty path auto-detects seeder.yaml in the CWD.
@@ -590,6 +623,8 @@ func PrintUsage(w io.Writer) {
 	fmt.Fprintln(w, "  seeder postgres://...  --dry-run")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "FLAGS:")
+	fmt.Fprintln(w, "  --batch-size int Rows generated per INSERT batch (default: 1000)")
+	fmt.Fprintln(w, "  --cache <file>   Load/save introspected schema to this file (delete to invalidate)")
 	fmt.Fprintln(w, "  --config <file>  Path to seeder.yaml (default: auto-detect ./seeder.yaml)")
 	fmt.Fprintln(w, "  --dry-run        Print plan, do not insert")
 	fmt.Fprintln(w, "  --exclude string Comma-separated tables to skip (cannot combine with --tables)")

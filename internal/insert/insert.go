@@ -24,14 +24,19 @@ type Options struct {
 	// Rows is the default row count; tables listed in RowsByTable override it.
 	Rows        int
 	RowsByTable map[string]int
-	Truncate    bool
-	DryRun      bool
-	Verbose     bool
+	// BatchSize bounds how many rows are generated in memory before a single
+	// BulkInsert flush. Zero or negative falls back to 1000.
+	BatchSize int
+	Truncate  bool
+	DryRun    bool
+	Verbose   bool
 	// Seed is nil for a time-based RNG seed.
 	Seed            *uint64
 	Locale          infer.Locale
 	ColumnOverrides map[string]map[string]ColumnOverride
 }
+
+const defaultBatchSize = 1000
 
 type ColumnOverride struct {
 	Generator string
@@ -71,7 +76,7 @@ func Run(
 	}
 	faker := gofakeit.New(seed)
 
-	pool := make(map[string]map[string][]any)
+	pool := NewPool(0)
 	poolCols := fkPoolColumns(schema)
 
 	if opts.Truncate && !opts.DryRun {
@@ -207,7 +212,7 @@ func insertTable(
 	t introspect.Table,
 	opts Options,
 	faker *gofakeit.Faker,
-	pool map[string]map[string][]any,
+	pool Pool,
 	poolCols []string,
 	out io.Writer,
 ) (Stats, error) {
@@ -248,11 +253,64 @@ func insertTable(
 		}
 	}
 
-	data := make([][]any, 0, rows)
-	// inBatch lets a later row's self-FK reference an earlier row's value
-	// before the parent table is flushed.
+	colNames := make([]string, len(cols))
+	for i, c := range cols {
+		colNames[i] = c.name
+	}
+
+	batchSize := opts.BatchSize
+	if batchSize <= 0 {
+		batchSize = defaultBatchSize
+	}
+
+	// inBatch is kept across batches so self-FK forward-reference behaves the
+	// same regardless of --batch-size (i.e., the seeded output is deterministic).
 	inBatch := make(map[string][]any)
-	for range rows {
+
+	var totalInserted int64
+	var totalTook time.Duration
+	remaining := rows
+	for remaining > 0 {
+		b := min(remaining, batchSize)
+		data, err := generateBatch(b, cols, faker, pool, inBatch, selfFKRefs, t.Name)
+		if err != nil {
+			return Stats{Table: t.Name, Rows: totalInserted, Took: totalTook}, err
+		}
+
+		start := time.Now()
+		n, err := drv.BulkInsert(ctx, t.Name, colNames, data)
+		if err != nil {
+			return Stats{Table: t.Name, Rows: totalInserted, Took: totalTook}, fmt.Errorf("bulk insert: %w", err)
+		}
+		totalTook += time.Since(start)
+		totalInserted += n
+		remaining -= b
+	}
+
+	if len(poolCols) > 0 {
+		vals, err := drv.ColumnValues(ctx, t.Name, poolCols)
+		if err != nil {
+			return Stats{Table: t.Name, Rows: totalInserted, Took: totalTook}, fmt.Errorf("column values: %w", err)
+		}
+		pool.Replace(t.Name, vals)
+	}
+
+	fmt.Fprintf(out, "  %s\t%d rows (%s)\n", t.Name, totalInserted, totalTook.Truncate(time.Microsecond))
+
+	return Stats{Table: t.Name, Rows: totalInserted, Took: totalTook}, nil
+}
+
+func generateBatch(
+	n int,
+	cols []colSpec,
+	faker *gofakeit.Faker,
+	pool Pool,
+	inBatch map[string][]any,
+	selfFKRefs map[string]bool,
+	tableName string,
+) ([][]any, error) {
+	data := make([][]any, 0, n)
+	for range n {
 		row := make([]any, len(cols))
 		for j, c := range cols {
 			if c.gen != nil {
@@ -263,55 +321,36 @@ func insertTable(
 			if c.gen != nil {
 				continue
 			}
-			if c.fk.table == t.Name {
-				val, err := pickSelfFK(faker, pool, inBatch, row, cols, c, t.Name)
+			if c.fk.table == tableName {
+				val, err := pickSelfFK(faker, pool, inBatch, row, cols, c, tableName)
 				if err != nil {
-					return Stats{Table: t.Name}, err
+					return nil, err
 				}
 				row[j] = val
 				continue
 			}
-			val, err := pickFK(faker, pool, c, t.Name)
+			val, err := pickFK(faker, pool, c, tableName)
 			if err != nil {
-				return Stats{Table: t.Name}, err
+				return nil, err
 			}
 			row[j] = val
 		}
 		for j, c := range cols {
 			if c.gen != nil && selfFKRefs[c.name] {
 				inBatch[c.name] = append(inBatch[c.name], row[j])
+				if len(inBatch[c.name]) > defaultPoolCapacity {
+					inBatch[c.name] = inBatch[c.name][len(inBatch[c.name])-defaultPoolCapacity:]
+				}
 			}
 		}
 		data = append(data, row)
 	}
 
-	colNames := make([]string, len(cols))
-	for i, c := range cols {
-		colNames[i] = c.name
-	}
-
-	start := time.Now()
-	n, err := drv.BulkInsert(ctx, t.Name, colNames, data)
-	if err != nil {
-		return Stats{Table: t.Name}, fmt.Errorf("bulk insert: %w", err)
-	}
-	took := time.Since(start)
-
-	if len(poolCols) > 0 {
-		vals, err := drv.ColumnValues(ctx, t.Name, poolCols)
-		if err != nil {
-			return Stats{Table: t.Name, Rows: n, Took: took}, fmt.Errorf("column values: %w", err)
-		}
-		pool[t.Name] = vals
-	}
-
-	fmt.Fprintf(out, "  %s\t%d rows (%s)\n", t.Name, n, took.Truncate(time.Microsecond))
-
-	return Stats{Table: t.Name, Rows: n, Took: took}, nil
+	return data, nil
 }
 
-func pickFK(faker *gofakeit.Faker, pool map[string]map[string][]any, c colSpec, tableName string) (any, error) {
-	vals := pool[c.fk.table][c.fk.col]
+func pickFK(faker *gofakeit.Faker, pool Pool, c colSpec, tableName string) (any, error) {
+	vals := pool.Values(c.fk.table, c.fk.col)
 	if len(vals) == 0 {
 		if !c.nullable {
 			return nil, fmt.Errorf("FK target %s.%s has no rows but %s.%s is NOT NULL", c.fk.table, c.fk.col, tableName, c.name)
@@ -325,14 +364,14 @@ func pickFK(faker *gofakeit.Faker, pool map[string]map[string][]any, c colSpec, 
 
 func pickSelfFK(
 	faker *gofakeit.Faker,
-	pool map[string]map[string][]any,
+	pool Pool,
 	inBatch map[string][]any,
 	row []any,
 	cols []colSpec,
 	c colSpec,
 	tableName string,
 ) (any, error) {
-	poolVals := pool[c.fk.table][c.fk.col]
+	poolVals := pool.Values(c.fk.table, c.fk.col)
 	inBatchVals := inBatch[c.fk.col]
 	total := len(poolVals) + len(inBatchVals)
 	if total > 0 {
