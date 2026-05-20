@@ -219,6 +219,87 @@ func TestRun_MySQL_UniqueColumnsAreDistinct(t *testing.T) {
 	}
 }
 
+const mysqlCompositeFKSchemaSQL = `
+CREATE TABLE projects (
+    id     INT AUTO_INCREMENT PRIMARY KEY,
+    code   VARCHAR(255) NOT NULL UNIQUE,
+    region VARCHAR(255) NOT NULL,
+    name   VARCHAR(255) NOT NULL,
+    UNIQUE (code, region)
+);
+
+CREATE TABLE tasks (
+    id             INT AUTO_INCREMENT PRIMARY KEY,
+    project_code   VARCHAR(255) NOT NULL,
+    project_region VARCHAR(255) NOT NULL,
+    title          VARCHAR(255) NOT NULL,
+    FOREIGN KEY (project_code, project_region) REFERENCES projects(code, region)
+)
+`
+
+//nolint:paralleltest,tparallel // mutates schema; cannot run in parallel
+func TestRun_MySQL_CompositeFK(t *testing.T) {
+	rawDSN := os.Getenv("SEEDER_TEST_DSN_MYSQL")
+	if rawDSN == "" {
+		t.Skip("SEEDER_TEST_DSN_MYSQL not set")
+	}
+
+	driverDSN, err := dsn.ToMySQLDSN(rawDSN)
+	if err != nil {
+		t.Fatalf("ToMySQLDSN: %v", err)
+	}
+	db, err := sql.Open("mysql", driverDSN)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	ctx := t.Context()
+	if err := applyMySQLInsertSchema(ctx, db, mysqlCompositeFKSchemaSQL); err != nil {
+		t.Fatalf("apply schema: %v", err)
+	}
+	schema, err := introspect.Do(ctx, rawDSN)
+	if err != nil {
+		t.Fatalf("introspect: %v", err)
+	}
+	order, err := plan.Build(schema.Tables)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	seed := uint64(42)
+	var buf bytes.Buffer
+	if _, err := insert.Run(ctx, rawDSN, schema, order, insert.Options{Rows: 30, Seed: &seed}, &buf); err != nil {
+		t.Fatalf("insert.Run: %v", err)
+	}
+
+	var orphans int
+	if err := db.QueryRowContext(ctx, `
+        SELECT COUNT(*) FROM tasks t
+        WHERE NOT EXISTS (
+            SELECT 1 FROM projects p
+            WHERE p.code = t.project_code AND p.region = t.project_region
+        )
+    `).Scan(&orphans); err != nil {
+		t.Fatalf("composite FK orphan check: %v", err)
+	}
+	if orphans != 0 {
+		t.Errorf("tasks with no matching (code, region) in projects = %d; want 0", orphans)
+	}
+
+	var mismatches int
+	if err := db.QueryRowContext(ctx, `
+        SELECT COUNT(*) FROM tasks t
+        JOIN projects p ON p.code = t.project_code
+        WHERE p.region <> t.project_region
+    `).Scan(&mismatches); err != nil {
+		t.Fatalf("tuple integrity check: %v", err)
+	}
+	if mismatches != 0 {
+		t.Errorf("tasks where project_code matches but project_region does not = %d; want 0", mismatches)
+	}
+}
+
 //nolint:paralleltest,tparallel // mutates schema; cannot run in parallel
 func TestRun_MySQL_Truncate(t *testing.T) {
 	rawDSN := os.Getenv("SEEDER_TEST_DSN_MYSQL")

@@ -69,14 +69,6 @@ func (d *mySQLDriver) Introspect(ctx context.Context) (Schema, error) {
 				t.Columns[i].IsUnique = true
 			}
 		}
-		for _, fk := range t.ForeignKeys {
-			if len(fk.Columns) > 1 {
-				return Schema{}, fmt.Errorf(
-					"table %s: composite FK %q (%d columns) is not supported in v0.1.0",
-					t.Name, fk.Name, len(fk.Columns),
-				)
-			}
-		}
 		out = append(out, *t)
 	}
 

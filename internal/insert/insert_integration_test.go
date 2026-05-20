@@ -525,6 +525,88 @@ func TestRun_SelfFKForwardReference(t *testing.T) {
 	}
 }
 
+const compositeFKSchemaSQL = `
+DROP SCHEMA public CASCADE;
+CREATE SCHEMA public;
+
+CREATE TABLE projects (
+    id     serial PRIMARY KEY,
+    code   text   NOT NULL UNIQUE,
+    region text   NOT NULL,
+    name   text   NOT NULL,
+    UNIQUE (code, region)
+);
+
+CREATE TABLE tasks (
+    id             serial PRIMARY KEY,
+    project_code   text   NOT NULL,
+    project_region text   NOT NULL,
+    title          text   NOT NULL,
+    FOREIGN KEY (project_code, project_region) REFERENCES projects (code, region)
+);
+`
+
+//nolint:paralleltest,tparallel // mutates the public schema
+func TestRun_CompositeFK(t *testing.T) {
+	dsn := os.Getenv("SEEDER_TEST_DSN_POSTGRES")
+	if dsn == "" {
+		t.Skip("SEEDER_TEST_DSN_POSTGRES not set")
+	}
+
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+
+	if _, err := conn.Exec(ctx, compositeFKSchemaSQL); err != nil {
+		t.Fatalf("apply schema: %v", err)
+	}
+	schema, err := introspect.Do(ctx, dsn)
+	if err != nil {
+		t.Fatalf("introspect: %v", err)
+	}
+	order, err := plan.Build(schema.Tables)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if _, err := insert.Run(ctx, dsn, schema, order, insert.Options{Rows: 30, Seed: new(uint64(42))}, &buf); err != nil {
+		t.Fatalf("insert.Run: %v", err)
+	}
+
+	var orphans int
+	if err := conn.QueryRow(ctx, `
+        SELECT COUNT(*) FROM tasks t
+        WHERE NOT EXISTS (
+            SELECT 1 FROM projects p
+            WHERE p.code = t.project_code AND p.region = t.project_region
+        )
+    `).Scan(&orphans); err != nil {
+		t.Fatalf("composite FK orphan check: %v", err)
+	}
+	if orphans != 0 {
+		t.Errorf("tasks with no matching (code, region) in projects = %d; want 0", orphans)
+	}
+
+	// Confirm the FK group resolved as a tuple, not by independent picks
+	// per column — otherwise (code, region) pairs that never coexist in
+	// projects can appear in tasks.
+	var mismatches int
+	if err := conn.QueryRow(ctx, `
+        SELECT COUNT(*) FROM tasks t
+        JOIN projects p ON p.code = t.project_code
+        WHERE p.region <> t.project_region
+    `).Scan(&mismatches); err != nil {
+		t.Fatalf("tuple integrity check: %v", err)
+	}
+	if mismatches != 0 {
+		t.Errorf("tasks where project_code matches but project_region does not = %d; want 0", mismatches)
+	}
+}
+
 //nolint:paralleltest,tparallel // mutates the public schema
 func TestRun_Truncate(t *testing.T) {
 	dsn := os.Getenv("SEEDER_TEST_DSN_POSTGRES")

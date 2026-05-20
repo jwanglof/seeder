@@ -49,6 +49,29 @@ type Stats struct {
 	Took  time.Duration
 }
 
+// fkSpec is shared across every column that belongs to the same foreign key.
+// For composite FKs, every member column's colSpec.fk points at the same
+// instance, so a row's picker resolves the parent tuple once and spreads
+// referenced values across the local columns at consistent indices.
+type fkSpec struct {
+	referencedTable   string
+	referencedColumns []string
+	localCols         []string
+	// allNullable is true when every local column in the FK is nullable;
+	// false aborts insert on an empty parent pool, true degrades to NULLs.
+	allNullable bool
+}
+
+type colSpec struct {
+	name     string
+	nullable bool
+	// gen is non-nil for seeder-generated columns. FK columns leave it nil
+	// and resolve through fk.
+	gen   generator.Func
+	fk    *fkSpec
+	fkIdx int // position within fk.localCols / fk.referencedColumns
+}
+
 func Run(
 	ctx context.Context,
 	dataSourceName string,
@@ -124,39 +147,56 @@ func fkPoolColumns(schema introspect.Schema) map[string][]string {
 	return out
 }
 
-type colSpec struct {
-	name     string
-	nullable bool
-	// gen is non-nil for a column whose value seeder generates itself.
-	// gen is nil for FK columns; in that case `fk` is meaningful.
-	gen generator.Func
-	fk  fkSpec
-}
-
-type fkSpec struct {
-	table string
-	col   string
-}
-
 func planColumns(
 	t introspect.Table, faker *gofakeit.Faker,
 	locale infer.Locale, overrides map[string]ColumnOverride,
 ) ([]colSpec, error) {
+	nullable := make(map[string]bool, len(t.Columns))
+	for _, c := range t.Columns {
+		nullable[c.Name] = c.Nullable
+	}
+
+	fkByCol := make(map[string]*fkSpec, len(t.ForeignKeys))
+	fkIdxByCol := make(map[string]int, len(t.ForeignKeys))
+	for _, fk := range t.ForeignKeys {
+		spec := &fkSpec{
+			referencedTable:   fk.ReferencedTable,
+			referencedColumns: slices.Clone(fk.ReferencedColumns),
+			localCols:         slices.Clone(fk.Columns),
+			allNullable:       true,
+		}
+		for _, lc := range fk.Columns {
+			if !nullable[lc] {
+				spec.allNullable = false
+
+				break
+			}
+		}
+		for i, c := range fk.Columns {
+			fkByCol[c] = spec
+			fkIdxByCol[c] = i
+		}
+	}
+
 	cols := make([]colSpec, 0, len(t.Columns))
 	for _, c := range t.Columns {
 		if c.IsIdentity {
 			continue
 		}
-		// FK columns always go through the FK pool, even when they have a
+		// FK columns always go through the FK pool, even when they carry a
 		// default or a yaml override (the override is intentionally ignored).
-		if fk, ok := findFK(t, c.Name); ok {
-			cols = append(cols, colSpec{name: c.Name, nullable: c.Nullable, fk: fk})
+		if spec, ok := fkByCol[c.Name]; ok {
+			cols = append(cols, colSpec{
+				name: c.Name, nullable: c.Nullable,
+				fk: spec, fkIdx: fkIdxByCol[c.Name],
+			})
+
 			continue
 		}
 		ov := overrides[c.Name]
 		hasOverride := ov.Generator != "" || ov.Value != nil
-		// A yaml override wins over the serial-default skip; the user
-		// asked for a specific value/generator, so honor it.
+		// A yaml override wins over the serial-default skip; the user asked
+		// for a specific value/generator, so honor it.
 		if !hasOverride && isSerialDefault(c.Default) {
 			continue
 		}
@@ -192,18 +232,6 @@ func overrideGenerator(faker *gofakeit.Faker, ov ColumnOverride) (generator.Func
 // sequence stays authoritative; other defaults are intentionally overridden.
 func isSerialDefault(def *string) bool {
 	return def != nil && strings.HasPrefix(*def, "nextval(")
-}
-
-func findFK(t introspect.Table, column string) (fkSpec, bool) {
-	for _, fk := range t.ForeignKeys {
-		for i, c := range fk.Columns {
-			if c == column {
-				return fkSpec{table: fk.ReferencedTable, col: fk.ReferencedColumns[i]}, true
-			}
-		}
-	}
-
-	return fkSpec{}, false
 }
 
 func insertTable(
@@ -245,11 +273,14 @@ func insertTable(
 	}
 
 	// selfFKRefs lists columns referenced by a self-FK in this table; only
-	// those values need to be remembered for later rows.
+	// those values are stashed per row so later rows in the same batch can
+	// pick them.
 	selfFKRefs := make(map[string]bool)
 	for _, c := range cols {
-		if c.gen == nil && c.fk.table == t.Name {
-			selfFKRefs[c.fk.col] = true
+		if c.fk != nil && c.fk.referencedTable == t.Name {
+			for _, refCol := range c.fk.referencedColumns {
+				selfFKRefs[refCol] = true
+			}
 		}
 	}
 
@@ -264,15 +295,15 @@ func insertTable(
 	}
 
 	// inBatch is kept across batches so self-FK forward-reference behaves the
-	// same regardless of --batch-size (i.e., the seeded output is deterministic).
-	inBatch := make(map[string][]any)
+	// same regardless of --batch-size (the seeded output stays deterministic).
+	inBatch := newBatchBuffer(selfFKRefs, defaultPoolCapacity)
 
 	var totalInserted int64
 	var totalTook time.Duration
 	remaining := rows
 	for remaining > 0 {
 		b := min(remaining, batchSize)
-		data, err := generateBatch(b, cols, faker, pool, inBatch, selfFKRefs, t.Name)
+		data, err := generateBatch(b, cols, faker, pool, inBatch, t.Name)
 		if err != nil {
 			return Stats{Table: t.Name, Rows: totalInserted, Took: totalTook}, err
 		}
@@ -300,103 +331,158 @@ func insertTable(
 	return Stats{Table: t.Name, Rows: totalInserted, Took: totalTook}, nil
 }
 
+// batchBuffer accumulates the columns referenced by self-FKs in this table,
+// row by row, so later rows in the same batch can forward-reference them.
+// Only refs-listed columns are remembered. The buffer is tail-trimmed to
+// cap, matching Pool's capacity policy.
+type batchBuffer struct {
+	refs map[string]bool
+	rows []map[string]any
+	cap  int
+}
+
+func newBatchBuffer(refs map[string]bool, cap int) *batchBuffer {
+	return &batchBuffer{refs: refs, cap: cap}
+}
+
+func (b *batchBuffer) push(row map[string]any) {
+	if len(row) == 0 {
+		return
+	}
+	b.rows = append(b.rows, row)
+	if len(b.rows) > b.cap {
+		b.rows = b.rows[len(b.rows)-b.cap:]
+	}
+}
+
+func (b *batchBuffer) len() int                  { return len(b.rows) }
+func (b *batchBuffer) at(i int) map[string]any   { return b.rows[i] }
+func (b *batchBuffer) refSet() map[string]bool   { return b.refs }
+
 func generateBatch(
 	n int,
 	cols []colSpec,
 	faker *gofakeit.Faker,
 	pool Pool,
-	inBatch map[string][]any,
-	selfFKRefs map[string]bool,
+	inBatch *batchBuffer,
 	tableName string,
 ) ([][]any, error) {
 	data := make([][]any, 0, n)
 	for range n {
 		row := make([]any, len(cols))
+
 		for j, c := range cols {
 			if c.gen != nil {
 				row[j] = c.gen()
 			}
 		}
+
+		// Each FK group resolves once per row; the chosen parent tuple is
+		// then spread across the FK's local columns.
+		picked := make(map[*fkSpec]map[string]any)
+		absent := make(map[*fkSpec]bool)
 		for j, c := range cols {
 			if c.gen != nil {
 				continue
 			}
-			if c.fk.table == tableName {
-				val, err := pickSelfFK(faker, pool, inBatch, row, cols, c, tableName)
+			if _, done := picked[c.fk]; !done && !absent[c.fk] {
+				var pickedRow map[string]any
+				var err error
+				if c.fk.referencedTable == tableName {
+					pickedRow, err = pickSelfFKRow(faker, pool, inBatch, row, cols, c.fk, tableName)
+				} else {
+					pickedRow, err = pickFKRow(faker, pool, c.fk, tableName)
+				}
 				if err != nil {
 					return nil, err
 				}
-				row[j] = val
-				continue
-			}
-			val, err := pickFK(faker, pool, c, tableName)
-			if err != nil {
-				return nil, err
-			}
-			row[j] = val
-		}
-		for j, c := range cols {
-			if c.gen != nil && selfFKRefs[c.name] {
-				inBatch[c.name] = append(inBatch[c.name], row[j])
-				if len(inBatch[c.name]) > defaultPoolCapacity {
-					inBatch[c.name] = inBatch[c.name][len(inBatch[c.name])-defaultPoolCapacity:]
+				if pickedRow == nil {
+					absent[c.fk] = true
+				} else {
+					picked[c.fk] = pickedRow
 				}
 			}
+			if absent[c.fk] {
+				row[j] = nil
+
+				continue
+			}
+			row[j] = picked[c.fk][c.fk.referencedColumns[c.fkIdx]]
 		}
+
+		if refs := inBatch.refSet(); len(refs) > 0 {
+			stash := make(map[string]any, len(refs))
+			for j, c := range cols {
+				if refs[c.name] {
+					stash[c.name] = row[j]
+				}
+			}
+			inBatch.push(stash)
+		}
+
 		data = append(data, row)
 	}
 
 	return data, nil
 }
 
-func pickFK(faker *gofakeit.Faker, pool Pool, c colSpec, tableName string) (any, error) {
-	vals := pool.Values(c.fk.table, c.fk.col)
-	if len(vals) == 0 {
-		if !c.nullable {
-			return nil, fmt.Errorf("FK target %s.%s has no rows but %s.%s is NOT NULL", c.fk.table, c.fk.col, tableName, c.name)
-		}
-
-		return nil, nil //nolint:nilnil // intentional NULL for a nullable FK with empty parent pool
+func pickFKRow(faker *gofakeit.Faker, pool Pool, fk *fkSpec, tableName string) (map[string]any, error) {
+	row := pool.PickRow(faker, fk.referencedTable)
+	if row != nil {
+		return row, nil
+	}
+	if !fk.allNullable {
+		return nil, fmt.Errorf(
+			"FK target %s has no rows but %s requires a value for (%s)",
+			fk.referencedTable, tableName, strings.Join(fk.localCols, ", "),
+		)
 	}
 
-	return vals[faker.IntRange(0, len(vals)-1)], nil
+	return nil, nil //nolint:nilnil // intentional NULL group for a fully-nullable FK with empty parent pool
 }
 
-func pickSelfFK(
+// pickSelfFKRow combines the parent pool and the in-batch buffer at a single
+// uniform index, so forward-references behave the same across --batch-size.
+// The last-chance self-loop applies only when every referenced column is
+// seeder-generated in the current row.
+func pickSelfFKRow(
 	faker *gofakeit.Faker,
 	pool Pool,
-	inBatch map[string][]any,
+	inBatch *batchBuffer,
 	row []any,
 	cols []colSpec,
-	c colSpec,
+	fk *fkSpec,
 	tableName string,
-) (any, error) {
-	poolVals := pool.Values(c.fk.table, c.fk.col)
-	inBatchVals := inBatch[c.fk.col]
-	total := len(poolVals) + len(inBatchVals)
+) (map[string]any, error) {
+	poolRows := pool.Rows(fk.referencedTable)
+	total := len(poolRows) + inBatch.len()
 	if total > 0 {
 		idx := faker.IntRange(0, total-1)
-		if idx < len(poolVals) {
-			return poolVals[idx], nil
+		if idx < len(poolRows) {
+			return poolRows[idx], nil
 		}
 
-		return inBatchVals[idx-len(poolVals)], nil
+		return inBatch.at(idx - len(poolRows)), nil
 	}
 
-	if c.nullable {
-		return nil, nil //nolint:nilnil // intentional NULL for a nullable self-FK on the first batch row
+	if fk.allNullable {
+		return nil, nil //nolint:nilnil // intentional NULL group for fully-nullable self-FK on the first row
 	}
 
-	// Row 0 self-loop: only works when the referenced column is seeder-generated.
-	// IDENTITY / serial / FK-populated columns are unknown at this point.
-	if refVal, ok := lookupOwnRef(row, cols, c.fk.col); ok {
-		return refVal, nil
+	selfRow := make(map[string]any, len(fk.referencedColumns))
+	for _, refCol := range fk.referencedColumns {
+		v, ok := lookupOwnRef(row, cols, refCol)
+		if !ok {
+			return nil, fmt.Errorf(
+				"self-FK on %s (%s) is NOT NULL but no seeded values are available and %s.%s is not seeder-generated",
+				tableName, strings.Join(fk.localCols, ", "),
+				fk.referencedTable, refCol,
+			)
+		}
+		selfRow[refCol] = v
 	}
 
-	return nil, fmt.Errorf(
-		"self-FK %s.%s is NOT NULL but no seeded values are available and %s.%s is not seeder-generated",
-		tableName, c.name, c.fk.table, c.fk.col,
-	)
+	return selfRow, nil
 }
 
 func lookupOwnRef(row []any, cols []colSpec, refCol string) (any, bool) {
@@ -429,8 +515,12 @@ func explainColumn(t introspect.Table, c introspect.Column, ov ColumnOverride) s
 	if c.IsIdentity {
 		return "skip: identity"
 	}
-	if fk, ok := findFK(t, c.Name); ok {
-		return fmt.Sprintf("fk: %s.%s", fk.table, fk.col)
+	for _, fk := range t.ForeignKeys {
+		for i, lc := range fk.Columns {
+			if lc == c.Name {
+				return fmt.Sprintf("fk: %s.%s", fk.ReferencedTable, fk.ReferencedColumns[i])
+			}
+		}
 	}
 	hasOverride := ov.Generator != "" || ov.Value != nil
 	if !hasOverride && isSerialDefault(c.Default) {
