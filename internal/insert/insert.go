@@ -339,21 +339,21 @@ func pickSelfFK(
 		return nil, nil //nolint:nilnil // intentional NULL for a nullable self-FK on the first batch row
 	}
 
-	// Row 0 self-loop: only works when the referenced PK is seeder-generated;
-	// a DB-generated PK (serial / AUTO_INCREMENT) is not yet known here.
-	if pkVal, ok := lookupOwnPK(row, cols, c.fk.col); ok {
-		return pkVal, nil
+	// Row 0 self-loop: only works when the referenced column is seeder-generated.
+	// IDENTITY / serial / FK-populated columns are unknown at this point.
+	if refVal, ok := lookupOwnRef(row, cols, c.fk.col); ok {
+		return refVal, nil
 	}
 
 	return nil, fmt.Errorf(
-		"self-FK %s.%s is NOT NULL but no seeded values are available and %s.%s is DB-generated",
+		"self-FK %s.%s is NOT NULL but no seeded values are available and %s.%s is not seeder-generated",
 		tableName, c.name, c.fk.table, c.fk.col,
 	)
 }
 
-func lookupOwnPK(row []any, cols []colSpec, pkCol string) (any, bool) {
+func lookupOwnRef(row []any, cols []colSpec, refCol string) (any, bool) {
 	for j, c := range cols {
-		if c.name == pkCol && c.gen != nil {
+		if c.name == refCol && c.gen != nil {
 			return row[j], true
 		}
 	}
