@@ -239,7 +239,10 @@ single per-column generator can guarantee combined uniqueness.
 > `INSERT` before building the next, so memory stays bounded even at
 > millions of rows. The parent-PK pool used for FK resolution is also capped
 > at 100k values per (table, column); when refilled it keeps the tail of
-> what the driver returned (i.e., only the last 100k entries are kept).
+> what the driver returned (i.e., only the last 100k entries are kept). The
+> in-batch self-FK buffer used for forward-references shares the same 100k
+> cap, so self-referential tables with seeder-generated PKs do not grow
+> unbounded either.
 
 ### Foreign keys
 
