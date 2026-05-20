@@ -183,7 +183,7 @@ falls back to its SQL type:
 | `name`, `first_name`, `last_name`, `display_name`, ... | person name               |
 | `phone`, `tel`, `mobile`                               | phone number              |
 | `*_url`, `link`, `homepage`, `website`                 | URL                       |
-| `avatar`, `image`, `photo`, `picture`, `thumbnail`     | image placeholder URL     |
+| `avatar`, `image`, `photo`, `picture`, `thumbnail` (also `_url`-suffixed) | image placeholder URL |
 | `address`, `city`, `country`, `zip`                    | postal address parts      |
 | `description`, `bio`, `note`, `body`, `content`        | paragraph                 |
 | `title`, `subject`, `headline`                         | sentence                  |
