@@ -239,9 +239,18 @@ func insertTable(
 		return Stats{Table: t.Name, Rows: int64(rows)}, nil
 	}
 
+	// selfFKRefs lists columns referenced by a self-FK in this table; only
+	// those values need to be remembered for later rows.
+	selfFKRefs := make(map[string]bool)
+	for _, c := range cols {
+		if c.gen == nil && c.fk.table == t.Name {
+			selfFKRefs[c.fk.col] = true
+		}
+	}
+
 	data := make([][]any, 0, rows)
-	// inBatch lets a later row's self-FK reference an earlier row's PK before
-	// the parent table is flushed.
+	// inBatch lets a later row's self-FK reference an earlier row's value
+	// before the parent table is flushed.
 	inBatch := make(map[string][]any)
 	for range rows {
 		row := make([]any, len(cols))
@@ -269,7 +278,7 @@ func insertTable(
 			row[j] = val
 		}
 		for j, c := range cols {
-			if c.gen != nil {
+			if c.gen != nil && selfFKRefs[c.name] {
 				inBatch[c.name] = append(inBatch[c.name], row[j])
 			}
 		}
