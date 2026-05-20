@@ -237,6 +237,15 @@ func pickBase(f *gofakeit.Faker, col introspect.Column, locale Locale) generator
 	return generator.FromKind(f, col.Kind, col.EnumValues)
 }
 
+func uniqueIntStart(f *gofakeit.Faker, dataType string) int {
+	switch strings.ToLower(dataType) {
+	case "tinyint", "smallint":
+		return 1
+	}
+
+	return f.Number(1, 1000)
+}
+
 // uniqueWrap is best-effort: large row counts can still collide and surface as
 // a unique-violation from the DB.
 func uniqueWrap(f *gofakeit.Faker, col introspect.Column, base generator.Func) generator.Func {
@@ -264,10 +273,11 @@ func uniqueWrap(f *gofakeit.Faker, col introspect.Column, base generator.Func) g
 			return v + "-" + f.UUID()
 		}
 	case introspect.KindInt:
-		// Counter-based to stay within narrower integer types (smallint /
-		// tinyint also map to KindInt); the random initial offset still
-		// avoids overlapping the lower end of the range across runs.
-		counter := f.Number(1, 1000)
+		// Counter-based to give every row a distinct value. Narrow integer
+		// types (tinyint / smallint) start from 1 so the small cardinality is
+		// not wasted on an offset; wider types take a random offset so reseed
+		// values do not align with PKs from a previous run.
+		counter := uniqueIntStart(f, col.DataType)
 
 		return func() any {
 			v := counter

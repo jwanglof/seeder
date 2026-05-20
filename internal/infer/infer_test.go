@@ -195,6 +195,32 @@ func TestPick_UniqueInt(t *testing.T) {
 	}
 }
 
+func TestPick_UniqueInt_NarrowType(t *testing.T) {
+	t.Parallel()
+
+	f := gofakeit.New(42)
+	col := introspect.Column{
+		Name:     "code",
+		Kind:     introspect.KindInt,
+		DataType: "tinyint",
+		IsUnique: true,
+	}
+	gen := infer.Pick(f, col, infer.LocaleEN)
+
+	// Narrow ints start at 1 and increment, so the small cardinality of
+	// tinyint (signed max 127) is fully usable.
+	for i := 1; i <= 50; i++ {
+		v := gen()
+		n, ok := v.(int)
+		if !ok {
+			t.Fatalf("value = %T; want int", v)
+		}
+		if n != i {
+			t.Errorf("step %d: value = %d; want %d", i, n, i)
+		}
+	}
+}
+
 func TestPick_EnumByKind(t *testing.T) {
 	t.Parallel()
 
