@@ -310,8 +310,9 @@ func TestRun_DefaultColumnsAreOverridden(t *testing.T) {
 		t.Fatalf("plan: %v", err)
 	}
 
+	seed := uint64(42)
 	var buf bytes.Buffer
-	if _, err := insert.Run(ctx, dsn, schema, order, insert.Options{Rows: 50, Seed: new(uint64(42))}, &buf); err != nil {
+	if _, err := insert.Run(ctx, dsn, schema, order, insert.Options{Rows: 50, Seed: &seed}, &buf); err != nil {
 		t.Fatalf("insert.Run: %v", err)
 	}
 
@@ -363,8 +364,9 @@ func TestRun_UniqueColumnsAreDistinct(t *testing.T) {
 		t.Fatalf("plan: %v", err)
 	}
 
+	seed := uint64(42)
 	var buf bytes.Buffer
-	if _, err := insert.Run(ctx, dsn, schema, order, insert.Options{Rows: 50, Seed: new(uint64(42))}, &buf); err != nil {
+	if _, err := insert.Run(ctx, dsn, schema, order, insert.Options{Rows: 50, Seed: &seed}, &buf); err != nil {
 		t.Fatalf("insert.Run: %v", err)
 	}
 
@@ -420,8 +422,9 @@ func TestRun_SelfFKForwardReference(t *testing.T) {
 		t.Fatalf("plan: %v", err)
 	}
 
+	seed := uint64(42)
 	var buf bytes.Buffer
-	if _, err := insert.Run(ctx, dsn, schema, order, insert.Options{Rows: 50, Seed: new(uint64(42))}, &buf); err != nil {
+	if _, err := insert.Run(ctx, dsn, schema, order, insert.Options{Rows: 50, Seed: &seed}, &buf); err != nil {
 		t.Fatalf("insert.Run: %v", err)
 	}
 
