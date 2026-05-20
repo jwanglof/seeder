@@ -51,6 +51,8 @@ x86_64 / arm64) will land on GitHub Releases.
 seeder <dsn> [flags]
 
 FLAGS:
+  --batch-size int Rows generated per INSERT batch (default: 1000)
+  --cache <file>   Load/save introspected schema to this file (delete to invalidate)
   --config <file>  Path to seeder.yaml (default: auto-detect ./seeder.yaml)
   --dry-run        Print plan, do not insert
   --exclude string Comma-separated tables to skip (cannot combine with --tables)
@@ -109,6 +111,12 @@ dropdb mydb && createdb mydb && goose up && seeder $DATABASE_URL --rows 5000
 
 ```bash
 seeder $DATABASE_URL --locale ja
+```
+
+**Large schemas / repeated runs.** Cache the introspected schema so subsequent runs skip the `information_schema` round-trip. Delete the file after a migration to invalidate.
+
+```bash
+seeder $DATABASE_URL --cache /tmp/seeder-schema.gob --rows 5000
 ```
 
 ## Configuration
@@ -226,10 +234,11 @@ single per-column generator can guarantee combined uniqueness.
 > memory and bulk-insert throughput. `--exclude` the table or expect a
 > slower run; per-column overrides are planned for v0.2.0.
 
-> **Note on large `--rows`**: v0.1.0 generates every row in memory before
-> handing the batch to `COPY`. Hundreds of thousands of rows are fine on
-> a modern laptop, but `--rows 1,000,000+` can spike RAM into the GB range
-> (more with `jsonb`). Streamed / chunked inserts are planned for v0.2.0.
+> **Note on large `--rows`**: `seeder` generates rows in chunks of
+> `--batch-size` (default 1000) and flushes each chunk via `COPY` / multi-row
+> `INSERT` before building the next, so memory stays bounded even at
+> millions of rows. The parent-PK pool used for FK resolution is also capped
+> at 100k values per (table, column), with older entries dropped first.
 
 ### Foreign keys
 
