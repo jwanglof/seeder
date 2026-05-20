@@ -24,8 +24,13 @@ type Column struct {
 	EnumValues []string
 	Kind       Kind
 	Nullable   bool
-	HasDefault bool
+	// Default is the raw column_default expression; nil when the column has
+	// no default. A non-nil empty string is a valid value (e.g., MySQL
+	// `DEFAULT ''`).
+	Default    *string
 	IsIdentity bool
+	// IsUnique is set only for single-column UNIQUE constraints.
+	IsUnique bool
 }
 
 type ForeignKey struct {

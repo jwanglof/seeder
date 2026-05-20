@@ -15,13 +15,10 @@ import (
 
 	"github.com/mickamy/seeder/internal/dsn"
 	"github.com/mickamy/seeder/internal/introspect"
+	"github.com/mickamy/seeder/internal/tsql"
 )
 
 const mysqlSchemaSQL = `
-DROP TABLE IF EXISTS comments;
-DROP TABLE IF EXISTS orders;
-DROP TABLE IF EXISTS users;
-
 CREATE TABLE users (
     id         INT AUTO_INCREMENT PRIMARY KEY,
     email      VARCHAR(255) NOT NULL UNIQUE,
@@ -147,6 +144,9 @@ func TestIntrospect_MySQL(t *testing.T) {
 }
 
 func applyMySQLSchema(ctx context.Context, db *sql.DB, schemaSQL string) error {
+	if err := tsql.ResetMySQLTables(ctx, db); err != nil {
+		return err
+	}
 	for _, stmt := range strings.Split(schemaSQL, ";") {
 		stmt = strings.TrimSpace(stmt)
 		if stmt == "" {

@@ -16,13 +16,10 @@ import (
 	"github.com/mickamy/seeder/internal/insert"
 	"github.com/mickamy/seeder/internal/introspect"
 	"github.com/mickamy/seeder/internal/plan"
+	"github.com/mickamy/seeder/internal/tsql"
 )
 
 const mysqlInsertSchemaSQL = `
-DROP TABLE IF EXISTS comments;
-DROP TABLE IF EXISTS orders;
-DROP TABLE IF EXISTS users;
-
 CREATE TABLE users (
     id         INT AUTO_INCREMENT PRIMARY KEY,
     email      VARCHAR(255) NOT NULL,
@@ -114,6 +111,114 @@ func TestRun_MySQL_Basic(t *testing.T) {
 	}
 }
 
+const mysqlDefaultsSchemaSQL = `
+CREATE TABLE counters (
+    id    INT AUTO_INCREMENT PRIMARY KEY,
+    label VARCHAR(255) NOT NULL,
+    score INT          NOT NULL DEFAULT 0
+)
+`
+
+//nolint:paralleltest,tparallel // mutates schema; cannot run in parallel
+func TestRun_MySQL_DefaultColumnsAreOverridden(t *testing.T) {
+	rawDSN := os.Getenv("SEEDER_TEST_DSN_MYSQL")
+	if rawDSN == "" {
+		t.Skip("SEEDER_TEST_DSN_MYSQL not set")
+	}
+
+	driverDSN, err := dsn.ToMySQLDSN(rawDSN)
+	if err != nil {
+		t.Fatalf("ToMySQLDSN: %v", err)
+	}
+	db, err := sql.Open("mysql", driverDSN)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	ctx := t.Context()
+	if err := applyMySQLInsertSchema(ctx, db, mysqlDefaultsSchemaSQL); err != nil {
+		t.Fatalf("apply schema: %v", err)
+	}
+	schema, err := introspect.Do(ctx, rawDSN)
+	if err != nil {
+		t.Fatalf("introspect: %v", err)
+	}
+	order, err := plan.Build(schema.Tables)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	seed := uint64(42)
+	var buf bytes.Buffer
+	if _, err := insert.Run(ctx, rawDSN, schema, order, insert.Options{Rows: 50, Seed: &seed}, &buf); err != nil {
+		t.Fatalf("insert.Run: %v", err)
+	}
+
+	var total, zeroScores int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*), SUM(score = 0) FROM counters").Scan(&total, &zeroScores); err != nil {
+		t.Fatalf("counters check: %v", err)
+	}
+	if total != 50 {
+		t.Errorf("counters total = %d; want 50", total)
+	}
+	if zeroScores == total {
+		t.Errorf("every counters row has score=0; DEFAULT 0 was not overridden")
+	}
+}
+
+const mysqlUniqueSchemaSQL = `
+CREATE TABLE tags (
+    id   INT AUTO_INCREMENT PRIMARY KEY,
+    slug VARCHAR(255) NOT NULL UNIQUE
+)
+`
+
+//nolint:paralleltest,tparallel // mutates schema; cannot run in parallel
+func TestRun_MySQL_UniqueColumnsAreDistinct(t *testing.T) {
+	rawDSN := os.Getenv("SEEDER_TEST_DSN_MYSQL")
+	if rawDSN == "" {
+		t.Skip("SEEDER_TEST_DSN_MYSQL not set")
+	}
+
+	driverDSN, err := dsn.ToMySQLDSN(rawDSN)
+	if err != nil {
+		t.Fatalf("ToMySQLDSN: %v", err)
+	}
+	db, err := sql.Open("mysql", driverDSN)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	ctx := t.Context()
+	if err := applyMySQLInsertSchema(ctx, db, mysqlUniqueSchemaSQL); err != nil {
+		t.Fatalf("apply schema: %v", err)
+	}
+	schema, err := introspect.Do(ctx, rawDSN)
+	if err != nil {
+		t.Fatalf("introspect: %v", err)
+	}
+	order, err := plan.Build(schema.Tables)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	seed := uint64(42)
+	var buf bytes.Buffer
+	if _, err := insert.Run(ctx, rawDSN, schema, order, insert.Options{Rows: 50, Seed: &seed}, &buf); err != nil {
+		t.Fatalf("insert.Run: %v", err)
+	}
+
+	var distinctSlugs int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(DISTINCT slug) FROM tags").Scan(&distinctSlugs); err != nil {
+		t.Fatalf("tags distinct check: %v", err)
+	}
+	if distinctSlugs != 50 {
+		t.Errorf("tags distinct slugs = %d; want 50 (UNIQUE-aware generator collided)", distinctSlugs)
+	}
+}
+
 //nolint:paralleltest,tparallel // mutates schema; cannot run in parallel
 func TestRun_MySQL_Truncate(t *testing.T) {
 	rawDSN := os.Getenv("SEEDER_TEST_DSN_MYSQL")
@@ -164,6 +269,9 @@ func TestRun_MySQL_Truncate(t *testing.T) {
 }
 
 func applyMySQLInsertSchema(ctx context.Context, db *sql.DB, schemaSQL string) error {
+	if err := tsql.ResetMySQLTables(ctx, db); err != nil {
+		return err
+	}
 	for _, stmt := range strings.Split(schemaSQL, ";") {
 		stmt = strings.TrimSpace(stmt)
 		if stmt == "" {

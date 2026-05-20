@@ -55,11 +55,20 @@ func (d *mySQLDriver) Introspect(ctx context.Context) (Schema, error) {
 	if err := d.fetchForeignKeys(ctx, tables); err != nil {
 		return Schema{}, fmt.Errorf("fetch foreign keys: %w", err)
 	}
+	uniques, err := d.fetchSingleColumnUniques(ctx)
+	if err != nil {
+		return Schema{}, fmt.Errorf("fetch uniques: %w", err)
+	}
 
 	names := slices.Sorted(maps.Keys(tables))
 	out := make([]Table, 0, len(names))
 	for _, n := range names {
 		t := tables[n]
+		for i := range t.Columns {
+			if uniques[t.Name][t.Columns[i].Name] {
+				t.Columns[i].IsUnique = true
+			}
+		}
 		for _, fk := range t.ForeignKeys {
 			if len(fk.Columns) > 1 {
 				return Schema{}, fmt.Errorf(
@@ -81,7 +90,7 @@ SELECT
     c.data_type,
     c.column_type,
     c.is_nullable,
-    c.column_default IS NOT NULL AS has_default,
+    c.column_default,
     c.extra
 FROM information_schema.tables t
 JOIN information_schema.columns c
@@ -104,9 +113,9 @@ func (d *mySQLDriver) fetchTablesWithColumns(ctx context.Context) (map[string]*T
 		var (
 			tname, cname, dataType, columnType string
 			isNullable, extra                  string
-			hasDefault                         bool
+			colDefault                         sql.NullString
 		)
-		if err := rows.Scan(&tname, &cname, &dataType, &columnType, &isNullable, &hasDefault, &extra); err != nil {
+		if err := rows.Scan(&tname, &cname, &dataType, &columnType, &isNullable, &colDefault, &extra); err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
 		}
 		t, ok := tables[tname]
@@ -115,13 +124,18 @@ func (d *mySQLDriver) fetchTablesWithColumns(ctx context.Context) (map[string]*T
 			tables[tname] = t
 		}
 		kind, enumValues := mySQLKind(dataType, columnType)
+		var defaultVal *string
+		if colDefault.Valid {
+			s := colDefault.String
+			defaultVal = &s
+		}
 		t.Columns = append(t.Columns, Column{
 			Name:       cname,
 			DataType:   dataType,
 			EnumValues: enumValues,
 			Kind:       kind,
 			Nullable:   isNullable == "YES",
-			HasDefault: hasDefault,
+			Default:    defaultVal,
 			IsIdentity: strings.Contains(strings.ToLower(extra), "auto_increment"),
 		})
 	}
@@ -216,6 +230,58 @@ func (d *mySQLDriver) fetchForeignKeys(ctx context.Context, tables map[string]*T
 	}
 
 	return nil
+}
+
+// Returns every UNIQUE column; fetchSingleColumnUniques drops composite ones.
+const mySQLUniquesQuery = `
+SELECT
+    tc.constraint_name,
+    kcu.table_name,
+    kcu.column_name
+FROM information_schema.table_constraints tc
+JOIN information_schema.key_column_usage kcu
+  ON tc.constraint_name = kcu.constraint_name
+ AND tc.table_schema    = kcu.table_schema
+ AND tc.table_name      = kcu.table_name
+WHERE tc.constraint_type = 'UNIQUE'
+  AND tc.table_schema    = DATABASE()
+ORDER BY kcu.table_name, tc.constraint_name, kcu.ordinal_position
+`
+
+func (d *mySQLDriver) fetchSingleColumnUniques(ctx context.Context) (map[string]map[string]bool, error) {
+	rows, err := d.db.QueryContext(ctx, mySQLUniquesQuery)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	// MySQL constraint names are only unique per-table, so key by (table, name).
+	type constraintKey struct{ table, name string }
+	byConstraint := make(map[constraintKey][]string)
+	for rows.Next() {
+		var conName, tname, cname string
+		if err := rows.Scan(&conName, &tname, &cname); err != nil {
+			return nil, fmt.Errorf("scan: %w", err)
+		}
+		k := constraintKey{table: tname, name: conName}
+		byConstraint[k] = append(byConstraint[k], cname)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows: %w", err)
+	}
+
+	out := make(map[string]map[string]bool)
+	for k, cols := range byConstraint {
+		if len(cols) != 1 {
+			continue
+		}
+		if out[k.table] == nil {
+			out[k.table] = make(map[string]bool)
+		}
+		out[k.table][cols[0]] = true
+	}
+
+	return out, nil
 }
 
 func mySQLKind(dataType, columnType string) (Kind, []string) {

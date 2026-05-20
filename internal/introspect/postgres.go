@@ -2,6 +2,7 @@ package introspect
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"maps"
 	"slices"
@@ -41,6 +42,10 @@ func (d *postgresDriver) Introspect(ctx context.Context) (Schema, error) {
 	if err := d.fetchForeignKeys(ctx, tables); err != nil {
 		return Schema{}, fmt.Errorf("fetch foreign keys: %w", err)
 	}
+	uniques, err := d.fetchSingleColumnUniques(ctx)
+	if err != nil {
+		return Schema{}, fmt.Errorf("fetch uniques: %w", err)
+	}
 
 	enumLabels, err := d.fetchEnums(ctx)
 	if err != nil {
@@ -56,6 +61,9 @@ func (d *postgresDriver) Introspect(ctx context.Context) (Schema, error) {
 			c.Kind = pgKind(c.DataType, c.UDTName, enumLabels)
 			if c.Kind == KindEnum {
 				c.EnumValues = enumLabels[c.UDTName]
+			}
+			if uniques[t.Name][c.Name] {
+				c.IsUnique = true
 			}
 		}
 		for _, fk := range t.ForeignKeys {
@@ -112,7 +120,7 @@ SELECT
     c.data_type,
     c.udt_name,
     c.is_nullable,
-    c.column_default IS NOT NULL AS has_default,
+    c.column_default,
     c.is_identity
 FROM information_schema.tables t
 JOIN information_schema.columns c
@@ -135,9 +143,9 @@ func (d *postgresDriver) fetchTablesWithColumns(ctx context.Context) (map[string
 		var (
 			tname, cname, dataType, udtName string
 			isNullable, isIdentity          string
-			hasDefault                      bool
+			colDefault                      sql.NullString
 		)
-		if err := rows.Scan(&tname, &cname, &dataType, &udtName, &isNullable, &hasDefault, &isIdentity); err != nil {
+		if err := rows.Scan(&tname, &cname, &dataType, &udtName, &isNullable, &colDefault, &isIdentity); err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
 		}
 		t, ok := tables[tname]
@@ -145,12 +153,17 @@ func (d *postgresDriver) fetchTablesWithColumns(ctx context.Context) (map[string
 			t = &Table{Name: tname}
 			tables[tname] = t
 		}
+		var defaultVal *string
+		if colDefault.Valid {
+			s := colDefault.String
+			defaultVal = &s
+		}
 		t.Columns = append(t.Columns, Column{
 			Name:       cname,
 			DataType:   dataType,
 			UDTName:    udtName,
 			Nullable:   isNullable == "YES",
-			HasDefault: hasDefault,
+			Default:    defaultVal,
 			IsIdentity: isIdentity == "YES",
 		})
 	}
@@ -253,6 +266,58 @@ func (d *postgresDriver) fetchForeignKeys(ctx context.Context, tables map[string
 	}
 
 	return nil
+}
+
+// Returns every UNIQUE column; fetchSingleColumnUniques drops composite ones.
+const pgUniquesQuery = `
+SELECT
+    tc.constraint_name,
+    kcu.table_name,
+    kcu.column_name
+FROM information_schema.table_constraints tc
+JOIN information_schema.key_column_usage kcu
+  ON tc.constraint_name   = kcu.constraint_name
+ AND tc.constraint_schema = kcu.constraint_schema
+WHERE tc.constraint_type = 'UNIQUE'
+  AND tc.table_schema    = 'public'
+ORDER BY kcu.table_name, tc.constraint_name, kcu.ordinal_position
+`
+
+// Postgres constraint names are unique within a schema, so the constraint_name
+// alone is enough to group rows belonging to the same UNIQUE constraint.
+func (d *postgresDriver) fetchSingleColumnUniques(ctx context.Context) (map[string]map[string]bool, error) {
+	rows, err := d.conn.Query(ctx, pgUniquesQuery)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	type tableCol struct{ table, column string }
+	byConstraint := make(map[string][]tableCol)
+	for rows.Next() {
+		var conName, tname, cname string
+		if err := rows.Scan(&conName, &tname, &cname); err != nil {
+			return nil, fmt.Errorf("scan: %w", err)
+		}
+		byConstraint[conName] = append(byConstraint[conName], tableCol{tname, cname})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows: %w", err)
+	}
+
+	out := make(map[string]map[string]bool)
+	for _, cols := range byConstraint {
+		if len(cols) != 1 {
+			continue
+		}
+		c := cols[0]
+		if out[c.table] == nil {
+			out[c.table] = make(map[string]bool)
+		}
+		out[c.table][c.column] = true
+	}
+
+	return out, nil
 }
 
 const pgEnumsQuery = `

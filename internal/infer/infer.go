@@ -1,6 +1,7 @@
 package infer
 
 import (
+	"fmt"
 	"regexp"
 	"slices"
 	"strings"
@@ -12,6 +13,12 @@ import (
 )
 
 type localeGen func(*gofakeit.Faker) any
+
+// Shared with uniqueWrap so the email / image shapes stay valid under UNIQUE.
+var (
+	emailNameRe = regexp.MustCompile(`(^|_)email(s)?$`)
+	imageNameRe = regexp.MustCompile(`^avatar(_url)?$|^image(_url)?$|^photo(_url)?$|^picture(_url)?$|^thumbnail(_url)?$`)
+)
 
 type nameRule struct {
 	label string
@@ -40,7 +47,7 @@ var (
 var nameRules = []nameRule{
 	{
 		label: "Email",
-		re:    regexp.MustCompile(`(^|_)email(s)?$`),
+		re:    emailNameRe,
 		kinds: stringKinds,
 		gens: map[Locale]localeGen{
 			LocaleEN: func(f *gofakeit.Faker) any { return f.Email() },
@@ -83,8 +90,18 @@ var nameRules = []nameRule{
 		},
 	},
 	{
+		label: "Image",
+		re:    imageNameRe,
+		kinds: stringKinds,
+		gens: map[Locale]localeGen{
+			LocaleEN: func(f *gofakeit.Faker) any {
+				return fmt.Sprintf("https://picsum.photos/seed/%d/200/200", f.Number(1, 1_000_000))
+			},
+		},
+	},
+	{
 		label: "URL",
-		re:    regexp.MustCompile(`(^|_)url$|^link$|^homepage$|^website$|^avatar(_url)?$|^image(_url)?$`),
+		re:    regexp.MustCompile(`(^|_)url$|^link$|^homepage$|^website$`),
 		kinds: stringKinds,
 		gens: map[Locale]localeGen{
 			LocaleEN: func(f *gofakeit.Faker) any { return f.URL() },
@@ -202,6 +219,15 @@ var nameRules = []nameRule{
 }
 
 func Pick(f *gofakeit.Faker, col introspect.Column, locale Locale) generator.Func {
+	base := pickBase(f, col, locale)
+	if !col.IsUnique {
+		return base
+	}
+
+	return uniqueWrap(f, col, base)
+}
+
+func pickBase(f *gofakeit.Faker, col introspect.Column, locale Locale) generator.Func {
 	if r, ok := matchRule(col); ok {
 		gen := r.gen(locale)
 
@@ -211,16 +237,84 @@ func Pick(f *gofakeit.Faker, col introspect.Column, locale Locale) generator.Fun
 	return generator.FromKind(f, col.Kind, col.EnumValues)
 }
 
-// Explain reports which rule Pick will use for col; meant for --verbose output.
-func Explain(col introspect.Column) string {
-	if r, ok := matchRule(col); ok {
-		return "name match: " + r.label
-	}
-	if col.Kind == introspect.KindEnum && len(col.EnumValues) > 0 {
-		return "enum: " + strings.Join(col.EnumValues, ",")
+func uniqueIntStart(f *gofakeit.Faker, dataType string) int {
+	switch strings.ToLower(dataType) {
+	case "tinyint", "smallint":
+		return 1
 	}
 
-	return "kind: " + col.Kind.String()
+	return f.Number(1, 1000)
+}
+
+// uniqueWrap is best-effort: large row counts can still collide and surface as
+// a unique-violation from the DB.
+func uniqueWrap(f *gofakeit.Faker, col introspect.Column, base generator.Func) generator.Func {
+	name := strings.ToLower(col.Name)
+	switch col.Kind {
+	case introspect.KindString:
+		if emailNameRe.MatchString(name) {
+			return func() any { return f.UUID() + "@example.com" }
+		}
+		if imageNameRe.MatchString(name) {
+			// Vary the picsum seed segment so the URL stays valid as
+			// `/seed/<uuid>/200/200` instead of being suffixed and breaking
+			// the path shape.
+			return func() any {
+				return fmt.Sprintf("https://picsum.photos/seed/%s/200/200", f.UUID())
+			}
+		}
+
+		return func() any {
+			v, ok := base().(string)
+			if !ok {
+				return f.UUID()
+			}
+
+			return v + "-" + f.UUID()
+		}
+	case introspect.KindInt:
+		// Counter-based to give every row a distinct value. Narrow integer
+		// types (tinyint / smallint) start from 1 so the small cardinality is
+		// not wasted on an offset; wider types take a random offset so reseed
+		// values do not align with PKs from a previous run.
+		counter := uniqueIntStart(f, col.DataType)
+
+		return func() any {
+			v := counter
+			counter++
+
+			return v
+		}
+	case introspect.KindUnknown,
+		introspect.KindBool,
+		introspect.KindFloat,
+		introspect.KindUUID,
+		introspect.KindDate,
+		introspect.KindTime,
+		introspect.KindTimestamp,
+		introspect.KindJSON,
+		introspect.KindEnum,
+		introspect.KindBytes:
+		return base
+	}
+
+	return base
+}
+
+// Explain reports which rule Pick will use for col; meant for --verbose output.
+func Explain(col introspect.Column) string {
+	prefix := ""
+	if col.IsUnique {
+		prefix = "unique-aware "
+	}
+	if r, ok := matchRule(col); ok {
+		return prefix + "name match: " + r.label
+	}
+	if col.Kind == introspect.KindEnum && len(col.EnumValues) > 0 {
+		return prefix + "enum: " + strings.Join(col.EnumValues, ",")
+	}
+
+	return prefix + "kind: " + col.Kind.String()
 }
 
 func matchRule(col introspect.Column) (nameRule, bool) {

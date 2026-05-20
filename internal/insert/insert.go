@@ -17,7 +17,7 @@ import (
 )
 
 var errNoWritableColumns = errors.New(
-	"no writable columns (all columns are identity or int-with-default); cannot seed in v0.1.0",
+	"no writable columns (all columns are identity or DB-managed sequence)",
 )
 
 type Options struct {
@@ -150,9 +150,9 @@ func planColumns(
 		}
 		ov := overrides[c.Name]
 		hasOverride := ov.Generator != "" || ov.Value != nil
-		// A yaml override wins over the int-with-default skip; the user
+		// A yaml override wins over the serial-default skip; the user
 		// asked for a specific value/generator, so honor it.
-		if !hasOverride && c.HasDefault && hasIntDefault(c.Kind) {
+		if !hasOverride && isSerialDefault(c.Default) {
 			continue
 		}
 
@@ -183,14 +183,10 @@ func overrideGenerator(faker *gofakeit.Faker, ov ColumnOverride) (generator.Func
 	return nil, nil //nolint:nilnil // no override; caller falls back to infer.Pick
 }
 
-// hasIntDefault returns true when an int-kind column is best left to the
-// database default. The common case is a serial / IDENTITY column where the
-// default is `nextval(...)`; we conservatively skip any int with a default
-// (e.g., a `DEFAULT 0` counter) rather than parse the raw default expression.
-// Parsing the expression so only true `nextval(...)` columns are skipped is
-// planned for v0.2.0.
-func hasIntDefault(kind introspect.Kind) bool {
-	return kind == introspect.KindInt
+// isSerialDefault leaves Postgres `nextval(...)` defaults to the DB so the
+// sequence stays authoritative; other defaults are intentionally overridden.
+func isSerialDefault(def *string) bool {
+	return def != nil && strings.HasPrefix(*def, "nextval(")
 }
 
 func findFK(t introspect.Table, column string) (fkSpec, bool) {
@@ -243,19 +239,48 @@ func insertTable(
 		return Stats{Table: t.Name, Rows: int64(rows)}, nil
 	}
 
+	// selfFKRefs lists columns referenced by a self-FK in this table; only
+	// those values need to be remembered for later rows.
+	selfFKRefs := make(map[string]bool)
+	for _, c := range cols {
+		if c.gen == nil && c.fk.table == t.Name {
+			selfFKRefs[c.fk.col] = true
+		}
+	}
+
 	data := make([][]any, 0, rows)
+	// inBatch lets a later row's self-FK reference an earlier row's value
+	// before the parent table is flushed.
+	inBatch := make(map[string][]any)
 	for range rows {
 		row := make([]any, len(cols))
 		for j, c := range cols {
-			if c.gen == nil {
-				val, err := pickFK(faker, pool, c, t.Name)
+			if c.gen != nil {
+				row[j] = c.gen()
+			}
+		}
+		for j, c := range cols {
+			if c.gen != nil {
+				continue
+			}
+			if c.fk.table == t.Name {
+				val, err := pickSelfFK(faker, pool, inBatch, row, cols, c, t.Name)
 				if err != nil {
 					return Stats{Table: t.Name}, err
 				}
 				row[j] = val
 				continue
 			}
-			row[j] = c.gen()
+			val, err := pickFK(faker, pool, c, t.Name)
+			if err != nil {
+				return Stats{Table: t.Name}, err
+			}
+			row[j] = val
+		}
+		for j, c := range cols {
+			if c.gen != nil && selfFKRefs[c.name] {
+				inBatch[c.name] = append(inBatch[c.name], row[j])
+			}
 		}
 		data = append(data, row)
 	}
@@ -298,6 +323,53 @@ func pickFK(faker *gofakeit.Faker, pool map[string]map[string][]any, c colSpec, 
 	return vals[faker.IntRange(0, len(vals)-1)], nil
 }
 
+func pickSelfFK(
+	faker *gofakeit.Faker,
+	pool map[string]map[string][]any,
+	inBatch map[string][]any,
+	row []any,
+	cols []colSpec,
+	c colSpec,
+	tableName string,
+) (any, error) {
+	poolVals := pool[c.fk.table][c.fk.col]
+	inBatchVals := inBatch[c.fk.col]
+	total := len(poolVals) + len(inBatchVals)
+	if total > 0 {
+		idx := faker.IntRange(0, total-1)
+		if idx < len(poolVals) {
+			return poolVals[idx], nil
+		}
+
+		return inBatchVals[idx-len(poolVals)], nil
+	}
+
+	if c.nullable {
+		return nil, nil //nolint:nilnil // intentional NULL for a nullable self-FK on the first batch row
+	}
+
+	// Row 0 self-loop: only works when the referenced column is seeder-generated.
+	// IDENTITY / serial / FK-populated columns are unknown at this point.
+	if refVal, ok := lookupOwnRef(row, cols, c.fk.col); ok {
+		return refVal, nil
+	}
+
+	return nil, fmt.Errorf(
+		"self-FK %s.%s is NOT NULL but no seeded values are available and %s.%s is not seeder-generated",
+		tableName, c.name, c.fk.table, c.fk.col,
+	)
+}
+
+func lookupOwnRef(row []any, cols []colSpec, refCol string) (any, bool) {
+	for j, c := range cols {
+		if c.name == refCol && c.gen != nil {
+			return row[j], true
+		}
+	}
+
+	return nil, false
+}
+
 func joinColNames(cols []colSpec) string {
 	names := make([]string, len(cols))
 	for i, c := range cols {
@@ -322,8 +394,8 @@ func explainColumn(t introspect.Table, c introspect.Column, ov ColumnOverride) s
 		return fmt.Sprintf("fk: %s.%s", fk.table, fk.col)
 	}
 	hasOverride := ov.Generator != "" || ov.Value != nil
-	if !hasOverride && c.HasDefault && hasIntDefault(c.Kind) {
-		return "skip: int with default"
+	if !hasOverride && isSerialDefault(c.Default) {
+		return "skip: serial default"
 	}
 	switch {
 	case ov.Generator != "":

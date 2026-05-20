@@ -273,6 +273,191 @@ func TestRun_DryRun(t *testing.T) {
 	}
 }
 
+const defaultsSchemaSQL = `
+DROP SCHEMA public CASCADE;
+CREATE SCHEMA public;
+
+CREATE TABLE counters (
+    id    serial PRIMARY KEY,
+    label text   NOT NULL,
+    score int    NOT NULL DEFAULT 0
+);
+`
+
+//nolint:paralleltest,tparallel // mutates the public schema
+func TestRun_DefaultColumnsAreOverridden(t *testing.T) {
+	dsn := os.Getenv("SEEDER_TEST_DSN_POSTGRES")
+	if dsn == "" {
+		t.Skip("SEEDER_TEST_DSN_POSTGRES not set")
+	}
+
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+
+	if _, err := conn.Exec(ctx, defaultsSchemaSQL); err != nil {
+		t.Fatalf("apply schema: %v", err)
+	}
+	schema, err := introspect.Do(ctx, dsn)
+	if err != nil {
+		t.Fatalf("introspect: %v", err)
+	}
+	order, err := plan.Build(schema.Tables)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if _, err := insert.Run(ctx, dsn, schema, order, insert.Options{Rows: 50, Seed: new(uint64(42))}, &buf); err != nil {
+		t.Fatalf("insert.Run: %v", err)
+	}
+
+	var total, zeroScores int
+	if err := conn.QueryRow(ctx, "SELECT COUNT(*), COUNT(*) FILTER (WHERE score = 0) FROM counters").Scan(&total, &zeroScores); err != nil {
+		t.Fatalf("counters check: %v", err)
+	}
+	if total != 50 {
+		t.Errorf("counters total = %d; want 50", total)
+	}
+	if zeroScores == total {
+		t.Errorf("every counters row has score=0; DEFAULT 0 was not overridden")
+	}
+}
+
+const uniqueSchemaSQL = `
+DROP SCHEMA public CASCADE;
+CREATE SCHEMA public;
+
+CREATE TABLE tags (
+    id   serial PRIMARY KEY,
+    slug text   NOT NULL UNIQUE
+);
+`
+
+//nolint:paralleltest,tparallel // mutates the public schema
+func TestRun_UniqueColumnsAreDistinct(t *testing.T) {
+	dsn := os.Getenv("SEEDER_TEST_DSN_POSTGRES")
+	if dsn == "" {
+		t.Skip("SEEDER_TEST_DSN_POSTGRES not set")
+	}
+
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+
+	if _, err := conn.Exec(ctx, uniqueSchemaSQL); err != nil {
+		t.Fatalf("apply schema: %v", err)
+	}
+	schema, err := introspect.Do(ctx, dsn)
+	if err != nil {
+		t.Fatalf("introspect: %v", err)
+	}
+	order, err := plan.Build(schema.Tables)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if _, err := insert.Run(ctx, dsn, schema, order, insert.Options{Rows: 50, Seed: new(uint64(42))}, &buf); err != nil {
+		t.Fatalf("insert.Run: %v", err)
+	}
+
+	var distinctSlugs int
+	if err := conn.QueryRow(ctx, "SELECT COUNT(DISTINCT slug) FROM tags").Scan(&distinctSlugs); err != nil {
+		t.Fatalf("tags distinct check: %v", err)
+	}
+	if distinctSlugs != 50 {
+		t.Errorf("tags distinct slugs = %d; want 50 (UNIQUE-aware generator collided)", distinctSlugs)
+	}
+}
+
+const selfFKSchemaSQL = `
+DROP SCHEMA public CASCADE;
+CREATE SCHEMA public;
+
+CREATE TABLE tree_nodes (
+    id        uuid PRIMARY KEY,
+    parent_id uuid REFERENCES tree_nodes(id),
+    name      text NOT NULL
+);
+
+CREATE TABLE forest_nodes (
+    id        uuid PRIMARY KEY,
+    parent_id uuid NOT NULL REFERENCES forest_nodes(id),
+    name      text NOT NULL
+);
+`
+
+//nolint:paralleltest,tparallel // mutates the public schema
+func TestRun_SelfFKForwardReference(t *testing.T) {
+	dsn := os.Getenv("SEEDER_TEST_DSN_POSTGRES")
+	if dsn == "" {
+		t.Skip("SEEDER_TEST_DSN_POSTGRES not set")
+	}
+
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+
+	if _, err := conn.Exec(ctx, selfFKSchemaSQL); err != nil {
+		t.Fatalf("apply schema: %v", err)
+	}
+	schema, err := introspect.Do(ctx, dsn)
+	if err != nil {
+		t.Fatalf("introspect: %v", err)
+	}
+	order, err := plan.Build(schema.Tables)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if _, err := insert.Run(ctx, dsn, schema, order, insert.Options{Rows: 50, Seed: new(uint64(42))}, &buf); err != nil {
+		t.Fatalf("insert.Run: %v", err)
+	}
+
+	var treeNonNullParents int
+	if err := conn.QueryRow(ctx, "SELECT COUNT(*) FROM tree_nodes WHERE parent_id IS NOT NULL").Scan(&treeNonNullParents); err != nil {
+		t.Fatalf("tree_nodes parent_id check: %v", err)
+	}
+	if treeNonNullParents == 0 {
+		t.Errorf("tree_nodes: every parent_id is NULL; nullable self-FK forward-reference is broken")
+	}
+
+	var treeOrphans int
+	if err := conn.QueryRow(ctx, "SELECT COUNT(*) FROM tree_nodes WHERE parent_id IS NOT NULL AND parent_id NOT IN (SELECT id FROM tree_nodes)").Scan(&treeOrphans); err != nil {
+		t.Fatalf("tree_nodes orphan check: %v", err)
+	}
+	if treeOrphans != 0 {
+		t.Errorf("tree_nodes orphan parent_id = %d", treeOrphans)
+	}
+
+	var forestNullParents int
+	if err := conn.QueryRow(ctx, "SELECT COUNT(*) FROM forest_nodes WHERE parent_id IS NULL").Scan(&forestNullParents); err != nil {
+		t.Fatalf("forest_nodes NULL check: %v", err)
+	}
+	if forestNullParents != 0 {
+		t.Errorf("forest_nodes NULL parent_id = %d; NOT NULL self-FK should always resolve", forestNullParents)
+	}
+
+	var forestOrphans int
+	if err := conn.QueryRow(ctx, "SELECT COUNT(*) FROM forest_nodes WHERE parent_id NOT IN (SELECT id FROM forest_nodes)").Scan(&forestOrphans); err != nil {
+		t.Fatalf("forest_nodes orphan check: %v", err)
+	}
+	if forestOrphans != 0 {
+		t.Errorf("forest_nodes orphan parent_id = %d", forestOrphans)
+	}
+}
+
 //nolint:paralleltest,tparallel // mutates the public schema
 func TestRun_Truncate(t *testing.T) {
 	dsn := os.Getenv("SEEDER_TEST_DSN_POSTGRES")

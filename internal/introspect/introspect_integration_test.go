@@ -6,6 +6,7 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -89,8 +90,8 @@ func TestIntrospect(t *testing.T) {
 	}
 
 	idCol := findColumn(t, users, "id")
-	if !idCol.HasDefault {
-		t.Errorf("users.id HasDefault = false; want true (serial nextval)")
+	if idCol.Default == nil || !strings.HasPrefix(*idCol.Default, "nextval(") {
+		t.Errorf("users.id Default = %v; want non-nil with prefix nextval(", idCol.Default)
 	}
 	nameCol := findColumn(t, users, "name")
 	if !nameCol.Nullable {
