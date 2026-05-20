@@ -249,29 +249,30 @@ func (d *mySQLDriver) fetchSingleColumnUniques(ctx context.Context) (map[string]
 	}
 	defer func() { _ = rows.Close() }()
 
-	type tableCol struct{ table, column string }
-	byConstraint := make(map[string][]tableCol)
+	// MySQL constraint names are only unique per-table, so key by (table, name).
+	type constraintKey struct{ table, name string }
+	byConstraint := make(map[constraintKey][]string)
 	for rows.Next() {
 		var conName, tname, cname string
 		if err := rows.Scan(&conName, &tname, &cname); err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
 		}
-		byConstraint[conName] = append(byConstraint[conName], tableCol{tname, cname})
+		k := constraintKey{table: tname, name: conName}
+		byConstraint[k] = append(byConstraint[k], cname)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows: %w", err)
 	}
 
 	out := make(map[string]map[string]bool)
-	for _, cols := range byConstraint {
+	for k, cols := range byConstraint {
 		if len(cols) != 1 {
 			continue
 		}
-		c := cols[0]
-		if out[c.table] == nil {
-			out[c.table] = make(map[string]bool)
+		if out[k.table] == nil {
+			out[k.table] = make(map[string]bool)
 		}
-		out[c.table][c.column] = true
+		out[k.table][cols[0]] = true
 	}
 
 	return out, nil
