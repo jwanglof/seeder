@@ -307,8 +307,9 @@ const (
 )
 
 // uniqueEmailString keeps the "<uuid>@example.com" shape when MaxLength allows,
-// shortens the UUID local-part when only the domain fits, and falls back to a
-// numeric counter when even the domain does not fit.
+// shortens the UUID local-part when only one or more local-part characters
+// plus the full domain fit, and falls back to a numeric counter when MaxLength
+// cannot hold even a single local-part character on top of the domain.
 func uniqueEmailString(f *gofakeit.Faker, maxLen int) generator.Func {
 	if maxLen <= 0 || maxLen >= len(emailSuffix)+36 {
 		return func() any { return f.UUID() + emailSuffix }
