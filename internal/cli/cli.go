@@ -230,6 +230,8 @@ func validateFlags(
 		return "--stream cannot combine with --output"
 	case stream && dryRun:
 		return "--stream cannot combine with --dry-run"
+	case outputArg != "" && dryRun:
+		return "--output cannot combine with --dry-run"
 	}
 
 	return ""

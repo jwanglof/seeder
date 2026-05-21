@@ -43,6 +43,13 @@ type Options struct {
 	// OutputWriter is the destination for OutputMode != "". When nil, the
 	// out writer passed to Run is used.
 	OutputWriter io.Writer
+	// SkipPoolRefresh keeps insertTable from issuing Driver.ColumnValues
+	// after every table flush. CDC streaming sets it so each tick stays
+	// O(batch) instead of O(table). The pool is fed from the rows just
+	// inserted (seeder-generated columns only); DB-managed columns such as
+	// IDENTITY / serial PKs do NOT propagate into the pool in this mode, so
+	// later FKs may stick to the values captured during the initial seed.
+	SkipPoolRefresh bool
 }
 
 const defaultBatchSize = 1000
@@ -338,6 +345,42 @@ func isSingleColumnPK(t introspect.Table, name string) bool {
 	return len(t.PrimaryKey) == 1 && t.PrimaryKey[0] == name
 }
 
+// poolRowsFromBatch projects a freshly-generated batch onto the pool-column
+// set. Used by stream mode to feed the pool without re-fetching from the DB.
+// If any pool column is DB-managed (identity / serial) — i.e., not present
+// in cols — the function returns nil so the caller leaves the table's pool
+// alone. Emitting rows with missing columns would let downstream FK pickers
+// grab partial tuples and write NULLs for the missing referenced column.
+func poolRowsFromBatch(batch [][]any, cols []colSpec, poolCols []string) []map[string]any {
+	if len(batch) == 0 || len(poolCols) == 0 {
+		return nil
+	}
+	want := make(map[string]int, len(poolCols))
+	for _, c := range poolCols {
+		want[c] = -1
+	}
+	for i, c := range cols {
+		if _, ok := want[c.name]; ok {
+			want[c.name] = i
+		}
+	}
+	for _, idx := range want {
+		if idx < 0 {
+			return nil
+		}
+	}
+	out := make([]map[string]any, 0, len(batch))
+	for _, row := range batch {
+		m := make(map[string]any, len(poolCols))
+		for col, idx := range want {
+			m[col] = row[idx]
+		}
+		out = append(out, m)
+	}
+
+	return out
+}
+
 func insertTable(
 	ctx context.Context,
 	drv Driver,
@@ -416,9 +459,13 @@ func insertTable(
 		totalTook += time.Since(start)
 		totalInserted += n
 		remaining -= b
+
+		if opts.SkipPoolRefresh && len(poolCols) > 0 {
+			pool.Append(t.Name, poolRowsFromBatch(data, cols, poolCols))
+		}
 	}
 
-	if len(poolCols) > 0 {
+	if !opts.SkipPoolRefresh && len(poolCols) > 0 {
 		vals, err := drv.ColumnValues(ctx, t.Name, poolCols)
 		if err != nil {
 			return Stats{Table: t.Name, Rows: totalInserted, Took: totalTook}, fmt.Errorf("column values: %w", err)

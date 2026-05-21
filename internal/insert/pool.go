@@ -58,6 +58,22 @@ func (p Pool) Rows(table string) []map[string]any {
 	return p.data[table]
 }
 
+// Append adds rows to table's pool and tail-trims to Capacity. Stream mode
+// uses this so it doesn't have to re-fetch every row from the DB each tick.
+// Panics on a zero-value Pool.
+func (p Pool) Append(table string, rows []map[string]any) {
+	if p.data == nil {
+		panic("insert: Pool must be constructed via NewPool")
+	}
+	if len(rows) == 0 {
+		return
+	}
+	p.data[table] = append(p.data[table], rows...)
+	if p.Capacity > 0 && len(p.data[table]) > p.Capacity {
+		p.data[table] = p.data[table][len(p.data[table])-p.Capacity:]
+	}
+}
+
 // Replace overwrites the rows for table by zipping the per-column slices in
 // vals into row tuples. Each vals[col][i] must come from the same source row
 // (holds when Driver.ColumnValues fills the map from a single SELECT). The
