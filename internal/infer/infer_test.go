@@ -1,11 +1,13 @@
 package infer_test
 
 import (
+	"fmt"
 	"regexp"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/brianvoe/gofakeit/v7"
 
@@ -217,6 +219,161 @@ func TestPick_UniqueInt_NarrowType(t *testing.T) {
 		}
 		if n != i {
 			t.Errorf("step %d: value = %d; want %d", i, n, i)
+		}
+	}
+}
+
+func TestPick_UniqueString_RespectsMaxLength_Phone(t *testing.T) {
+	t.Parallel()
+
+	f := gofakeit.New(42)
+	col := introspect.Column{
+		Name:      "tel",
+		Kind:      introspect.KindString,
+		IsUnique:  true,
+		MaxLength: 11,
+	}
+	gen := infer.Pick(f, col, infer.LocaleEN)
+
+	seen := make(map[string]bool, 1000)
+	for i := range 1000 {
+		v := gen()
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("step %d: value = %T; want string", i, v)
+		}
+		if len(s) > col.MaxLength {
+			t.Fatalf("step %d: value %q length %d exceeds MaxLength %d", i, s, len(s), col.MaxLength)
+		}
+		if seen[s] {
+			t.Fatalf("step %d: value collided: %s", i, s)
+		}
+		seen[s] = true
+	}
+}
+
+func TestPick_UniqueEmail_RespectsMaxLength(t *testing.T) {
+	t.Parallel()
+
+	f := gofakeit.New(42)
+	col := introspect.Column{
+		Name:      "email",
+		Kind:      introspect.KindString,
+		IsUnique:  true,
+		MaxLength: 36,
+	}
+	gen := infer.Pick(f, col, infer.LocaleEN)
+
+	seen := make(map[string]bool, 500)
+	for i := range 500 {
+		v := gen()
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("step %d: value = %T; want string", i, v)
+		}
+		if len(s) > col.MaxLength {
+			t.Fatalf("step %d: value %q length %d exceeds MaxLength %d", i, s, len(s), col.MaxLength)
+		}
+		if !strings.HasSuffix(s, "@example.com") {
+			t.Errorf("step %d: value %q lost @example.com suffix", i, s)
+		}
+		if seen[s] {
+			t.Fatalf("step %d: value collided: %s", i, s)
+		}
+		seen[s] = true
+	}
+}
+
+func TestPick_UniqueImage_RespectsMaxLength(t *testing.T) {
+	t.Parallel()
+
+	f := gofakeit.New(42)
+	col := introspect.Column{
+		Name:      "avatar_url",
+		Kind:      introspect.KindString,
+		IsUnique:  true,
+		MaxLength: 50,
+	}
+	gen := infer.Pick(f, col, infer.LocaleEN)
+
+	seen := make(map[string]bool, 500)
+	for i := range 500 {
+		v := gen()
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("step %d: value = %T; want string", i, v)
+		}
+		if len(s) > col.MaxLength {
+			t.Fatalf("step %d: value %q length %d exceeds MaxLength %d", i, s, len(s), col.MaxLength)
+		}
+		if !strings.HasPrefix(s, "https://picsum.photos/seed/") || !strings.HasSuffix(s, "/200/200") {
+			t.Errorf("step %d: value %q lost picsum URL skeleton", i, s)
+		}
+		if seen[s] {
+			t.Fatalf("step %d: value collided: %s", i, s)
+		}
+		seen[s] = true
+	}
+}
+
+// Multi-byte base values (e.g., ja-locale names) must be truncated on rune
+// boundaries so the output stays valid UTF-8, and the UUID suffix must survive
+// even when the base is long enough to fill MaxLength on its own.
+func TestPick_UniqueString_RespectsMaxLength_CJK(t *testing.T) {
+	t.Parallel()
+
+	f := gofakeit.New(42)
+	col := introspect.Column{
+		Name:      "full_name",
+		Kind:      introspect.KindString,
+		IsUnique:  true,
+		MaxLength: 20,
+	}
+	gen := infer.Pick(f, col, infer.LocaleJA)
+
+	seen := make(map[string]bool, 200)
+	for i := range 200 {
+		v := gen()
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("step %d: value = %T; want string", i, v)
+		}
+		if !utf8.ValidString(s) {
+			t.Fatalf("step %d: value %q is not valid UTF-8", i, s)
+		}
+		if got := utf8.RuneCountInString(s); got > col.MaxLength {
+			t.Fatalf("step %d: value %q rune count %d exceeds MaxLength %d", i, s, got, col.MaxLength)
+		}
+		if !strings.Contains(s, "-") {
+			t.Errorf("step %d: value %q lost UUID suffix", i, s)
+		}
+		if seen[s] {
+			t.Fatalf("step %d: value collided: %s", i, s)
+		}
+		seen[s] = true
+	}
+}
+
+func TestPick_UniqueString_VeryTight_CounterShape(t *testing.T) {
+	t.Parallel()
+
+	f := gofakeit.New(42)
+	col := introspect.Column{
+		Name:      "code",
+		Kind:      introspect.KindString,
+		IsUnique:  true,
+		MaxLength: 5,
+	}
+	gen := infer.Pick(f, col, infer.LocaleEN)
+
+	for i := 1; i <= 100; i++ {
+		v := gen()
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("step %d: value = %T; want string", i, v)
+		}
+		if got, want := s, fmt.Sprintf("%05d", i); got != want {
+			t.Errorf("step %d: value = %q; want %q", i, got, want)
 		}
 	}
 }

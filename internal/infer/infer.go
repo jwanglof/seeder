@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/brianvoe/gofakeit/v7"
 
@@ -247,31 +248,21 @@ func uniqueIntStart(f *gofakeit.Faker, dataType string) int {
 }
 
 // uniqueWrap is best-effort: large row counts can still collide and surface as
-// a unique-violation from the DB.
+// a unique-violation from the DB. When the column declares a MaxLength, each
+// string strategy trims its output to fit, and very tight widths fall back to
+// a zero-padded numeric counter so the value still parses on the DB side.
 func uniqueWrap(f *gofakeit.Faker, col introspect.Column, base generator.Func) generator.Func {
 	name := strings.ToLower(col.Name)
 	switch col.Kind {
 	case introspect.KindString:
 		if emailNameRe.MatchString(name) {
-			return func() any { return f.UUID() + "@example.com" }
+			return uniqueEmailString(f, col.MaxLength)
 		}
 		if imageNameRe.MatchString(name) {
-			// Vary the picsum seed segment so the URL stays valid as
-			// `/seed/<uuid>/200/200` instead of being suffixed and breaking
-			// the path shape.
-			return func() any {
-				return fmt.Sprintf("https://picsum.photos/seed/%s/200/200", f.UUID())
-			}
+			return uniqueImageString(f, col.MaxLength)
 		}
 
-		return func() any {
-			v, ok := base().(string)
-			if !ok {
-				return f.UUID()
-			}
-
-			return v + "-" + f.UUID()
-		}
+		return uniqueGenericString(f, base, col.MaxLength)
 	case introspect.KindInt:
 		// Counter-based to give every row a distinct value. Narrow integer
 		// types (tinyint / smallint) start from 1 so the small cardinality is
@@ -299,6 +290,140 @@ func uniqueWrap(f *gofakeit.Faker, col introspect.Column, base generator.Func) g
 	}
 
 	return base
+}
+
+const (
+	emailSuffix = "@example.com"
+	imagePrefix = "https://picsum.photos/seed/"
+	imageSuffix = "/200/200"
+	// genericTightThreshold is the MaxLength below which the generic
+	// uniqueWrap stops trying to keep the base value (a phone number, name,
+	// etc.) and emits a zero-padded counter instead. Below this width the
+	// base would be truncated past recognition anyway.
+	genericTightThreshold = 16
+	// uniqueSuffixMinUUID is the minimum number of UUID characters reserved
+	// after the "-" separator so the suffix always contributes to uniqueness.
+	uniqueSuffixMinUUID = 8
+)
+
+// uniqueEmailString keeps the "<uuid>@example.com" shape when MaxLength allows,
+// shortens the UUID local-part when only one or more local-part characters
+// plus the full domain fit, and falls back to a numeric counter when MaxLength
+// cannot hold even a single local-part character on top of the domain.
+func uniqueEmailString(f *gofakeit.Faker, maxLen int) generator.Func {
+	if maxLen <= 0 || maxLen >= len(emailSuffix)+36 {
+		return func() any { return f.UUID() + emailSuffix }
+	}
+	if maxLen > len(emailSuffix) {
+		local := maxLen - len(emailSuffix)
+		return func() any {
+			u := f.UUID()
+			if len(u) > local {
+				u = u[:local]
+			}
+
+			return u + emailSuffix
+		}
+	}
+
+	return counterString(maxLen)
+}
+
+// uniqueImageString keeps the picsum URL shape when MaxLength allows, shortens
+// the seed UUID when the URL skeleton still fits, and falls back to a numeric
+// counter for very tight widths.
+func uniqueImageString(f *gofakeit.Faker, maxLen int) generator.Func {
+	fixed := len(imagePrefix) + len(imageSuffix)
+	if maxLen <= 0 || maxLen >= fixed+36 {
+		return func() any {
+			return imagePrefix + f.UUID() + imageSuffix
+		}
+	}
+	if maxLen > fixed {
+		seedLen := maxLen - fixed
+		return func() any {
+			u := f.UUID()
+			if len(u) > seedLen {
+				u = u[:seedLen]
+			}
+
+			return imagePrefix + u + imageSuffix
+		}
+	}
+
+	return counterString(maxLen)
+}
+
+// uniqueGenericString stitches "<base>-<uuid>" while reserving room for a
+// separator and at least uniqueSuffixMinUUID UUID characters, so the UUID
+// portion always survives and keeps the value distinct. Trimming the base
+// happens in rune units to avoid splitting a multi-byte UTF-8 character.
+// When MaxLength is too tight to keep both base and a useful UUID suffix, the
+// generator falls back to a zero-padded counter instead.
+func uniqueGenericString(f *gofakeit.Faker, base generator.Func, maxLen int) generator.Func {
+	if maxLen <= 0 {
+		return func() any {
+			v, ok := base().(string)
+			if !ok {
+				return f.UUID()
+			}
+
+			return v + "-" + f.UUID()
+		}
+	}
+	if maxLen < genericTightThreshold {
+		return counterString(maxLen)
+	}
+
+	return func() any {
+		v, ok := base().(string)
+		if !ok {
+			v = f.UUID()
+		}
+		baseRoom := maxLen - 1 - uniqueSuffixMinUUID // reserve "-" + min UUID chars
+		runes := []rune(v)
+		if len(runes) > baseRoom {
+			v = string(runes[:baseRoom])
+		}
+		uuidRoom := min(maxLen-utf8.RuneCountInString(v)-1, 36)
+		u := f.UUID()
+		if len(u) > uuidRoom {
+			u = u[:uuidRoom]
+		}
+
+		return v + "-" + u
+	}
+}
+
+// counterString returns a generator that emits a zero-padded numeric counter
+// exactly maxLen characters wide. The counter wraps within the column width,
+// so very small widths (e.g., varchar(2)) eventually repeat.
+func counterString(maxLen int) generator.Func {
+	mod := counterMod(maxLen)
+	var counter uint64
+
+	return func() any {
+		counter++
+
+		return fmt.Sprintf("%0*d", maxLen, counter%mod)
+	}
+}
+
+// counterMod returns 10^digits, capped at uint64 max for widths that exceed
+// what uint64 can represent.
+func counterMod(digits int) uint64 {
+	if digits <= 0 {
+		return 1
+	}
+	if digits >= 20 {
+		return ^uint64(0)
+	}
+	var n uint64 = 1
+	for range digits {
+		n *= 10
+	}
+
+	return n
 }
 
 // Explain reports which rule Pick will use for col; meant for --verbose output.
