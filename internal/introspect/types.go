@@ -31,10 +31,11 @@ type Column struct {
 	IsIdentity bool
 	// IsUnique is set only for single-column UNIQUE constraints.
 	IsUnique bool
-	// MaxLength is character_maximum_length for character types (char,
-	// varchar, text on both drivers). Zero means unspecified or unlimited;
-	// generators may use it to keep produced values inside the declared
-	// column width.
+	// MaxLength is character_maximum_length for length-limited character
+	// types (e.g., char, varchar). Zero means unspecified or unlimited;
+	// for example, Postgres text reports NULL here and decodes to 0.
+	// Generators may use MaxLength to keep produced values inside the
+	// declared column width.
 	MaxLength int
 }
 
