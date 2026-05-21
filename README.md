@@ -38,12 +38,38 @@ The three core promises:
 
 ## Install
 
+### Homebrew (macOS / Linux)
+
+```bash
+brew install mickamy/tap/seeder
+```
+
+### Windows
+
+Grab the latest `seeder_<version>_windows_<arch>.zip` from the
+[Releases](https://github.com/mickamy/seeder/releases) page, unzip, and move
+`seeder.exe` into a directory already on your `PATH` (e.g.,
+`%USERPROFILE%\bin`). The PowerShell snippet below picks the right archive
+for the current host arch and unpacks it next to the working directory; you
+still need the final move step yourself.
+
+```powershell
+$ver  = (Invoke-RestMethod https://api.github.com/repos/mickamy/seeder/releases/latest).tag_name.TrimStart('v')
+$arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' }
+Invoke-WebRequest -OutFile seeder.zip "https://github.com/mickamy/seeder/releases/latest/download/seeder_${ver}_windows_${arch}.zip"
+Expand-Archive seeder.zip -DestinationPath .\seeder -Force
+# Move .\seeder\seeder.exe into a directory on $env:PATH (e.g., $HOME\bin).
+```
+
+### From source
+
 ```bash
 go install github.com/mickamy/seeder@latest
 ```
 
-Requires Go 1.26+ to build from source. Release binaries (macOS / Linux,
-x86_64 / arm64) will land on GitHub Releases.
+Requires Go 1.26+ to build from source. Pre-built binaries (macOS / Linux /
+Windows × amd64 / arm64) are published on
+[GitHub Releases](https://github.com/mickamy/seeder/releases) on every tag.
 
 ## Usage
 
