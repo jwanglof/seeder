@@ -38,12 +38,33 @@ The three core promises:
 
 ## Install
 
+### Homebrew (macOS / Linux)
+
+```bash
+brew install mickamy/tap/seeder
+```
+
+### Windows
+
+Grab the latest `seeder_<version>_windows_<arch>.zip` from the
+[Releases](https://github.com/mickamy/seeder/releases) page, unzip, and put
+`seeder.exe` somewhere on your `PATH`. PowerShell one-liner:
+
+```powershell
+$ver = (Invoke-RestMethod https://api.github.com/repos/mickamy/seeder/releases/latest).tag_name.TrimStart('v')
+Invoke-WebRequest -OutFile seeder.zip "https://github.com/mickamy/seeder/releases/latest/download/seeder_${ver}_windows_amd64.zip"
+Expand-Archive seeder.zip -DestinationPath .\seeder
+```
+
+### From source
+
 ```bash
 go install github.com/mickamy/seeder@latest
 ```
 
-Requires Go 1.26+ to build from source. Release binaries (macOS / Linux,
-x86_64 / arm64) will land on GitHub Releases.
+Requires Go 1.26+ to build from source. Pre-built binaries (macOS / Linux /
+Windows × amd64 / arm64) are published on
+[GitHub Releases](https://github.com/mickamy/seeder/releases) on every tag.
 
 ## Usage
 
