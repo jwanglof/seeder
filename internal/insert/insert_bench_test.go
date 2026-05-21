@@ -46,9 +46,15 @@ CREATE TABLE comments (
 
 func benchSetup(b *testing.B) (string, introspect.Schema, []string) {
 	b.Helper()
-	dsn := os.Getenv("SEEDER_TEST_DSN_POSTGRES")
+	// SEEDER_BENCH_DSN is intentionally separate from
+	// SEEDER_TEST_DSN_POSTGRES: this benchmark runs
+	// `DROP SCHEMA public CASCADE`, so the DSN must point at a disposable
+	// database (typically the compose Postgres). Requiring an explicit
+	// opt-in env var avoids accidentally wiping a shared dev / CI database
+	// whose DSN happens to be exported for integration tests.
+	dsn := os.Getenv("SEEDER_BENCH_DSN")
 	if dsn == "" {
-		b.Skip("SEEDER_TEST_DSN_POSTGRES not set")
+		b.Skip("SEEDER_BENCH_DSN not set (benchmarks drop the public schema; set it to a disposable Postgres DSN)")
 	}
 
 	ctx := b.Context()

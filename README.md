@@ -352,8 +352,9 @@ SEEDER_TEST_DSN_MYSQL=mysql://root:pass@localhost:3306/dev?parseTime=true \
 SEEDER_TEST_DSN_POSTGRES=postgres://postgres:pass@localhost:5432/dev?sslmode=disable \
   make test-integration
 
-# Benchmarks (Postgres only; see bench/README.md for the current numbers)
-SEEDER_TEST_DSN_POSTGRES=postgres://postgres:pass@localhost:5432/dev?sslmode=disable \
+# Benchmarks (Postgres only; see bench/README.md). The bench DROPs and recreates
+# the public schema, so it uses its own env var instead of SEEDER_TEST_DSN_POSTGRES.
+SEEDER_BENCH_DSN=postgres://postgres:pass@localhost:5432/dev?sslmode=disable \
   go test -tags=integration -bench=. -benchmem -benchtime=5x -run=^$ \
     ./internal/insert/...
 ```

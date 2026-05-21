@@ -5,10 +5,15 @@ from:
 
 ```bash
 docker compose up -d postgres
-SEEDER_TEST_DSN_POSTGRES='postgres://postgres:pass@localhost:5432/dev?sslmode=disable' \
+SEEDER_BENCH_DSN='postgres://postgres:pass@localhost:5432/dev?sslmode=disable' \
   go test -tags=integration -bench=. -benchmem -benchtime=5x -run=^$ \
     ./internal/insert/...
 ```
+
+> **Heads-up**: the bench drops and recreates the `public` schema on the
+> target database, so it is gated behind its own env var (`SEEDER_BENCH_DSN`)
+> rather than reusing `SEEDER_TEST_DSN_POSTGRES`. Point it only at a
+> disposable database (the compose Postgres above is the intended target).
 
 ## Setup
 
@@ -60,7 +65,7 @@ SEEDER_TEST_DSN_POSTGRES='postgres://postgres:pass@localhost:5432/dev?sslmode=di
 
 ```bash
 docker compose up -d postgres
-SEEDER_TEST_DSN_POSTGRES='postgres://postgres:pass@localhost:5432/dev?sslmode=disable' \
+SEEDER_BENCH_DSN='postgres://postgres:pass@localhost:5432/dev?sslmode=disable' \
   go test -tags=integration -bench=. -benchmem -benchtime=5x -run=^$ \
     ./internal/insert/...
 ```
