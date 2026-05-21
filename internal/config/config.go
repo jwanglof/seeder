@@ -98,9 +98,22 @@ func Parse(data []byte) (Config, error) {
 				return Config{}, err
 			}
 		}
+		seenPolyCols := make(map[string]string)
 		for i, p := range t.Polymorphic {
 			if err := validatePolymorphic(name, i, p); err != nil {
 				return Config{}, err
+			}
+			for _, ref := range []struct{ col, kind string }{
+				{p.TypeColumn, "type_col"},
+				{p.IDColumn, "id_col"},
+			} {
+				if where, dup := seenPolyCols[ref.col]; dup {
+					return Config{}, fmt.Errorf(
+						"seeder.yaml: tables.%s.polymorphic[%d].%s: column %q already used by %s",
+						name, i, ref.kind, ref.col, where,
+					)
+				}
+				seenPolyCols[ref.col] = fmt.Sprintf("polymorphic[%d].%s", i, ref.kind)
 			}
 		}
 	}
