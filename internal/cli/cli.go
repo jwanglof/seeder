@@ -39,8 +39,11 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	dryRun := fs.Bool("dry-run", false, "print plan, do not insert")
 	excludeArg := fs.String("exclude", "", "comma-separated tables to skip (mutually exclusive with --tables)")
 	localeArg := fs.String("locale", "", "locale for name-rule generators (en, ja; default: en)")
+	outputArg := fs.String("output", "", "alternate output: sql | ndjson (default: insert into DB)")
+	rateArg := fs.Int("rate", 0, "rows per second across tables when --stream is set")
 	rows := fs.Int("rows", 1000, "rows per table")
 	seed := fs.Int64("seed", 0, "deterministic RNG seed (default: time-based when omitted)")
+	streamArg := fs.Bool("stream", false, "continuously append rows after the initial seed (CDC mode)")
 	tablesArg := fs.String("tables", "", "comma-separated tables to include (default: all)")
 	truncate := fs.Bool("truncate", false, "TRUNCATE before insert")
 	verbose := fs.Bool("verbose", false, "print per-column inference decisions")
@@ -67,7 +70,11 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 	dsn := fs.Arg(0)
 
-	if msg := validateFlags(*rows, *seed, *batchSize, *tablesArg, *excludeArg); msg != "" {
+	msg := validateFlags(
+		*rows, *seed, *batchSize, *tablesArg, *excludeArg, *outputArg,
+		*streamArg, *rateArg, *dryRun,
+	)
+	if msg != "" {
 		fmt.Fprintln(stderr, "seeder: "+msg)
 
 		return exit.Usage
@@ -135,18 +142,47 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return exit.Usage
 	}
 
-	order, err := plan.Build(schema.Tables)
+	polymorphic, err := resolvePolymorphic(cfg, schema)
+	if err != nil {
+		fmt.Fprintf(stderr, "seeder: %v\n", err)
+
+		return exit.Usage
+	}
+
+	order, err := plan.BuildWithDeps(schema.Tables, polymorphicDeps(polymorphic))
 	if err != nil {
 		fmt.Fprintf(stderr, "seeder: plan: %v\n", err)
 
 		return exit.Error
 	}
 
-	opts := buildInsertOptions(*rows, *batchSize, *truncate, *seed, *dryRun, *verbose, locale, set, cfg)
-	printHeader(stdout, order, countFKs(schema.Tables), opts)
+	opts := buildInsertOptions(*rows, *batchSize, *truncate, *seed, *dryRun, *verbose, *outputArg, locale, set, cfg)
+	opts.Polymorphic = polymorphic
+
+	// In --output modes, keep stdout exclusive to the emitted SQL/NDJSON so
+	// shell redirection (e.g., > seed.sql) yields a clean stream. Progress,
+	// headers, and the done line move to stderr.
+	progressOut := stdout
+	if opts.OutputMode != "" {
+		opts.OutputWriter = stdout
+		progressOut = stderr
+	}
+	printHeader(progressOut, order, countFKs(schema.Tables), opts)
+
+	if *streamArg {
+		err := insert.RunStream(ctx, dsn, schema, order, opts, insert.StreamOptions{Rate: *rateArg}, progressOut)
+		switch {
+		case err == nil, errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+			return exit.OK
+		default:
+			fmt.Fprintf(stderr, "seeder: %v\n", err)
+
+			return exit.Error
+		}
+	}
 
 	start := time.Now()
-	stats, err := insert.Run(ctx, dsn, schema, order, opts, stdout)
+	stats, err := insert.Run(ctx, dsn, schema, order, opts, progressOut)
 	if err != nil {
 		fmt.Fprintf(stderr, "seeder: %v\n", err)
 
@@ -158,7 +194,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	for _, s := range stats {
 		totalRows += s.Rows
 	}
-	fmt.Fprintf(stdout, "done:   %d row(s) in %s\n", totalRows, elapsed.Truncate(time.Millisecond))
+	fmt.Fprintf(progressOut, "done:   %d row(s) in %s\n", totalRows, elapsed.Truncate(time.Millisecond))
 
 	return exit.OK
 }
@@ -170,7 +206,11 @@ func flagSet(fs *flag.FlagSet) map[string]bool {
 	return out
 }
 
-func validateFlags(rows int, seed int64, batchSize int, tablesArg, excludeArg string) string {
+func validateFlags(
+	rows int, seed int64, batchSize int,
+	tablesArg, excludeArg, outputArg string,
+	stream bool, rate int, dryRun bool,
+) string {
 	switch {
 	case rows < 0:
 		return fmt.Sprintf("--rows must be >= 0, got %d", rows)
@@ -180,6 +220,18 @@ func validateFlags(rows int, seed int64, batchSize int, tablesArg, excludeArg st
 		return fmt.Sprintf("--batch-size must be > 0, got %d", batchSize)
 	case tablesArg != "" && excludeArg != "":
 		return "--tables and --exclude are mutually exclusive"
+	case outputArg != "" && outputArg != "sql" && outputArg != "ndjson":
+		return fmt.Sprintf("--output must be one of: ndjson, sql (got %q)", outputArg)
+	case stream && rate <= 0:
+		return "--stream requires --rate > 0"
+	case !stream && rate > 0:
+		return "--rate requires --stream"
+	case stream && outputArg != "":
+		return "--stream cannot combine with --output"
+	case stream && dryRun:
+		return "--stream cannot combine with --dry-run"
+	case outputArg != "" && dryRun:
+		return "--output cannot combine with --dry-run"
 	}
 
 	return ""
@@ -210,6 +262,7 @@ func applyTableFilters(
 
 func buildInsertOptions(
 	rows, batchSize int, truncate bool, seed int64, dryRun, verbose bool,
+	outputMode string,
 	locale infer.Locale,
 	set map[string]bool, cfg config.Config,
 ) insert.Options {
@@ -237,6 +290,7 @@ func buildInsertOptions(
 		Verbose:         verbose,
 		Locale:          locale,
 		ColumnOverrides: columnOverrides(cfg),
+		OutputMode:      outputMode,
 	}
 	switch {
 	case set["seed"]:
@@ -269,6 +323,8 @@ func printHeader(w io.Writer, order []string, fkCount int, opts insert.Options) 
 	fmt.Fprintf(w, "seeder: %d table(s), %d FK(s)\n", len(order), fkCount)
 	fmt.Fprintf(w, "order:  %s\n", strings.Join(order, " -> "))
 	switch {
+	case opts.OutputMode != "":
+		fmt.Fprintf(w, "mode:   output=%s (no DB writes)\n", opts.OutputMode)
 	case opts.DryRun:
 		fmt.Fprintln(w, "mode:   dry-run (no INSERT)")
 	case opts.Truncate:
@@ -284,6 +340,8 @@ var valueFlags = map[string]bool{
 	"config":     true,
 	"exclude":    true,
 	"locale":     true,
+	"output":     true,
+	"rate":       true,
 	"rows":       true,
 	"seed":       true,
 	"tables":     true,
@@ -433,6 +491,112 @@ func effectiveLocaleString(set map[string]bool, cliArg string, cfg config.Config
 		return cliArg
 	}
 	return cfg.Locale
+}
+
+// resolvePolymorphic turns each PolymorphicConfig into a PolymorphicSpec
+// with every target's IDCol filled in. Empty IDCol defaults to the target
+// table's first PK column; an unknown target table or a target table with
+// no PK aborts so the error surfaces before the insert loop.
+func resolvePolymorphic(cfg config.Config, schema introspect.Schema) (map[string][]insert.PolymorphicSpec, error) {
+	if len(cfg.Tables) == 0 {
+		return nil, nil //nolint:nilnil // an absent polymorphic block is a non-error, signaled by a nil map
+	}
+	tablesByName := make(map[string]introspect.Table, len(schema.Tables))
+	for _, t := range schema.Tables {
+		tablesByName[t.Name] = t
+	}
+	out := make(map[string][]insert.PolymorphicSpec)
+	for tname, tc := range cfg.Tables {
+		if len(tc.Polymorphic) == 0 {
+			continue
+		}
+		owningTable, ok := tablesByName[tname]
+		if !ok {
+			// Unknown owning table is surfaced by unknownConfigTables before
+			// this runs; skip silently here so the earlier error is the one
+			// the user sees.
+			continue
+		}
+		owningCols := columnSet(owningTable)
+		for i, pc := range tc.Polymorphic {
+			if !owningCols[pc.TypeColumn] {
+				return nil, fmt.Errorf(
+					"seeder.yaml: tables.%s.polymorphic[%d].type_col: column %q not found in table %s",
+					tname, i, pc.TypeColumn, tname,
+				)
+			}
+			if !owningCols[pc.IDColumn] {
+				return nil, fmt.Errorf(
+					"seeder.yaml: tables.%s.polymorphic[%d].id_col: column %q not found in table %s",
+					tname, i, pc.IDColumn, tname,
+				)
+			}
+			spec := insert.PolymorphicSpec{
+				TypeColumn: pc.TypeColumn,
+				IDColumn:   pc.IDColumn,
+			}
+			for j, target := range pc.Targets {
+				targetTable, ok := tablesByName[target.Table]
+				if !ok {
+					return nil, fmt.Errorf(
+						"seeder.yaml: tables.%s.polymorphic[%d].targets[%d]: unknown table %q",
+						tname, i, j, target.Table,
+					)
+				}
+				idCol := target.IDCol
+				if idCol == "" {
+					if len(targetTable.PrimaryKey) == 0 {
+						return nil, fmt.Errorf(
+							"seeder.yaml: tables.%s.polymorphic[%d].targets[%d]: table %q has no primary key; set id_col explicitly",
+							tname, i, j, target.Table,
+						)
+					}
+					idCol = targetTable.PrimaryKey[0]
+				} else if !columnSet(targetTable)[idCol] {
+					return nil, fmt.Errorf(
+						"seeder.yaml: tables.%s.polymorphic[%d].targets[%d].id_col: column %q not found in table %s",
+						tname, i, j, idCol, target.Table,
+					)
+				}
+				spec.Targets = append(spec.Targets, insert.PolymorphicTarget{
+					Table: target.Table,
+					Type:  target.Type,
+					IDCol: idCol,
+				})
+			}
+			out[tname] = append(out[tname], spec)
+		}
+	}
+	if len(out) == 0 {
+		return nil, nil //nolint:nilnil // an absent polymorphic block is a non-error, signaled by a nil map
+	}
+
+	return out, nil
+}
+
+func columnSet(t introspect.Table) map[string]bool {
+	out := make(map[string]bool, len(t.Columns))
+	for _, c := range t.Columns {
+		out[c.Name] = true
+	}
+
+	return out
+}
+
+func polymorphicDeps(polys map[string][]insert.PolymorphicSpec) map[string][]string {
+	if len(polys) == 0 {
+		return nil
+	}
+	out := make(map[string][]string, len(polys))
+	for tname, specs := range polys {
+		for _, s := range specs {
+			for _, target := range s.Targets {
+				out[tname] = append(out[tname], target.Table)
+			}
+		}
+	}
+
+	return out
 }
 
 func columnOverrides(cfg config.Config) map[string]map[string]insert.ColumnOverride {
@@ -629,8 +793,11 @@ func PrintUsage(w io.Writer) {
 	fmt.Fprintln(w, "  --dry-run        Print plan, do not insert")
 	fmt.Fprintln(w, "  --exclude string Comma-separated tables to skip (cannot combine with --tables)")
 	fmt.Fprintln(w, "  --locale string  Locale for name-rule generators (en, ja; default: en)")
+	fmt.Fprintln(w, "  --output string  Alternate output: sql | ndjson (default: insert into DB)")
+	fmt.Fprintln(w, "  --rate int       Rows per second across tables when --stream is set")
 	fmt.Fprintln(w, "  --rows int       Rows per table (default: 1000; overrides yaml when set)")
 	fmt.Fprintln(w, "  --seed N         Deterministic RNG seed (>= 0; default: time-based)")
+	fmt.Fprintln(w, "  --stream         Continuously append rows after the initial seed (CDC mode)")
 	fmt.Fprintln(w, "  --tables string  Comma-separated tables to include (default: all)")
 	fmt.Fprintln(w, "  --truncate       TRUNCATE before insert (default: append)")
 	fmt.Fprintln(w, "  --verbose        Print per-column inference decisions")

@@ -25,15 +25,35 @@ type Config struct {
 }
 
 type TableConfig struct {
-	Rows    *int                    `yaml:"rows,omitempty"`
-	Exclude bool                    `yaml:"exclude,omitempty"`
-	Columns map[string]ColumnConfig `yaml:"columns,omitempty"`
+	Rows        *int                    `yaml:"rows,omitempty"`
+	Exclude     bool                    `yaml:"exclude,omitempty"`
+	Columns     map[string]ColumnConfig `yaml:"columns,omitempty"`
+	Polymorphic []PolymorphicConfig     `yaml:"polymorphic,omitempty"`
 }
 
 // ColumnConfig requires exactly one of Generator or Value (see validateColumn).
 type ColumnConfig struct {
 	Generator string `yaml:"generator,omitempty"`
 	Value     any    `yaml:"value,omitempty"`
+}
+
+// PolymorphicConfig declares a Rails-style polymorphic association: TypeColumn
+// stores the target table's discriminator (Target.Type), IDColumn stores the
+// target row's id. Introspection cannot detect this on its own; users must
+// list each polymorphic site explicitly.
+type PolymorphicConfig struct {
+	TypeColumn string              `yaml:"type_col"`
+	IDColumn   string              `yaml:"id_col"`
+	Targets    []PolymorphicTarget `yaml:"targets"`
+}
+
+// PolymorphicTarget points IDColumn at a row in Table and writes Type into
+// TypeColumn. IDCol picks which column of Table to read; empty defaults to
+// the target table's first primary-key column.
+type PolymorphicTarget struct {
+	Table string `yaml:"table"`
+	Type  string `yaml:"type"`
+	IDCol string `yaml:"id_col,omitempty"`
 }
 
 // Load returns an error wrapping os.ErrNotExist when the file is missing
@@ -78,6 +98,24 @@ func Parse(data []byte) (Config, error) {
 				return Config{}, err
 			}
 		}
+		seenPolyCols := make(map[string]string)
+		for i, p := range t.Polymorphic {
+			if err := validatePolymorphic(name, i, p); err != nil {
+				return Config{}, err
+			}
+			for _, ref := range []struct{ col, kind string }{
+				{p.TypeColumn, "type_col"},
+				{p.IDColumn, "id_col"},
+			} {
+				if where, dup := seenPolyCols[ref.col]; dup {
+					return Config{}, fmt.Errorf(
+						"seeder.yaml: tables.%s.polymorphic[%d].%s: column %q already used by %s",
+						name, i, ref.kind, ref.col, where,
+					)
+				}
+				seenPolyCols[ref.col] = fmt.Sprintf("polymorphic[%d].%s", i, ref.kind)
+			}
+		}
 	}
 
 	return c, nil
@@ -100,6 +138,30 @@ func validateColumn(table, col string, cc ColumnConfig) error {
 				"seeder.yaml: tables.%s.columns.%s.value must be a scalar (string, number, bool), got %T",
 				table, col, cc.Value,
 			)
+		}
+	}
+	return nil
+}
+
+func validatePolymorphic(table string, idx int, p PolymorphicConfig) error {
+	if p.TypeColumn == "" {
+		return fmt.Errorf("seeder.yaml: tables.%s.polymorphic[%d].type_col is required", table, idx)
+	}
+	if p.IDColumn == "" {
+		return fmt.Errorf("seeder.yaml: tables.%s.polymorphic[%d].id_col is required", table, idx)
+	}
+	if p.TypeColumn == p.IDColumn {
+		return fmt.Errorf("seeder.yaml: tables.%s.polymorphic[%d]: type_col and id_col must differ", table, idx)
+	}
+	if len(p.Targets) == 0 {
+		return fmt.Errorf("seeder.yaml: tables.%s.polymorphic[%d].targets is required", table, idx)
+	}
+	for j, target := range p.Targets {
+		if target.Table == "" {
+			return fmt.Errorf("seeder.yaml: tables.%s.polymorphic[%d].targets[%d].table is required", table, idx, j)
+		}
+		if target.Type == "" {
+			return fmt.Errorf("seeder.yaml: tables.%s.polymorphic[%d].targets[%d].type is required", table, idx, j)
 		}
 	}
 	return nil

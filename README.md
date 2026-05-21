@@ -57,8 +57,11 @@ FLAGS:
   --dry-run        Print plan, do not insert
   --exclude string Comma-separated tables to skip (cannot combine with --tables)
   --locale string  Locale for name-rule generators (en, ja; default: en)
+  --output string  Alternate output: sql | ndjson (default: insert into DB)
+  --rate int       Rows per second across tables when --stream is set
   --rows int       Rows per table (default: 1000; overrides yaml when set)
   --seed N         Deterministic RNG seed (>= 0; default: time-based)
+  --stream         Continuously append rows after the initial seed (CDC mode)
   --tables string  Comma-separated tables to include (default: all)
   --truncate       TRUNCATE before insert (default: append)
   --verbose        Print per-column inference decisions
@@ -119,6 +122,24 @@ seeder $DATABASE_URL --locale ja
 seeder $DATABASE_URL --cache /tmp/seeder-schema.gob --rows 5000
 ```
 
+**SQL dump for migration repos.** Emit INSERT statements instead of writing to the DB — useful when you want a reproducible `seed.sql` checked in alongside migrations. Dialect is chosen from the DSN scheme (`mysql://` or `postgres://`); no connection is opened beyond the initial introspection. On Postgres, INSERTs for tables with IDENTITY columns include `OVERRIDING SYSTEM VALUE` so dumps load into both `BY DEFAULT` and `ALWAYS` identity schemas. After loading a dump that supplies explicit values for `serial` / IDENTITY columns, run `setval(...)` on the backing sequences so subsequent inserts don't collide with the seeded ids (out of scope for the dump itself).
+
+```bash
+seeder $DATABASE_URL --output sql --rows 100 > seed.sql
+```
+
+**ETL / streaming pipelines.** `--output ndjson` writes one JSON object per row, prefixed with `_table`, so downstream consumers can route rows by destination.
+
+```bash
+seeder $DATABASE_URL --output ndjson --rows 100 | kafkacat -P -t seed-stream
+```
+
+**Continuous load / replication-lag testing.** `--stream --rate N` seeds the schema once, then keeps appending rows at roughly N total per second across all tables until Ctrl-C.
+
+```bash
+seeder $DATABASE_URL --stream --rate 1000
+```
+
 ## Configuration
 
 `seeder` runs zero-config out of the box. When you want to pin row counts or skip specific tables without retyping flags every time, drop a `seeder.yaml` next to where you run the command — it is auto-detected. Use `--config path/to/seeder.yaml` to point at one explicitly.
@@ -151,6 +172,21 @@ Per-column overrides under `tables.<name>.columns.<col>` bypass inference for a 
 - `value: <literal>` — pin the column to a fixed yaml value (string, number, bool).
 
 Foreign-key columns are not overridable: yaml entries for them are ignored and the FK pool is used instead, so children still point at real parents.
+
+Polymorphic associations (Rails-style `*_type` + `*_id` pairs) cannot be detected from `information_schema` alone, so declare them under `tables.<name>.polymorphic`. Each entry picks one target table uniformly per row, then takes its id from the FK pool:
+
+```yaml
+tables:
+  comments:
+    polymorphic:
+      - type_col: commentable_type
+        id_col:   commentable_id
+        targets:
+          - { table: posts,    type: Post }
+          - { table: articles, type: Article }
+```
+
+`id_col` on a target defaults to that table's first primary-key column; set `id_col: <col>` on the target to point at a different column (which must be in the FK pool, e.g., a `UNIQUE` non-PK column). `seeder` also adds the target tables as plan dependencies, so parents are seeded before the polymorphic owner.
 
 The yaml `locale` field is equivalent to the `--locale` flag and follows the same precedence.
 
@@ -249,6 +285,14 @@ single per-column generator can guarantee combined uniqueness.
 Tables are inserted in dependency order: parents first, then children pick
 a random parent PK for each FK column.
 
+- **Composite FK** (multiple local columns referencing the same parent
+  tuple): `seeder` picks the parent row once and spreads its referenced
+  columns across the local FK group, so the inserted row always matches a
+  real parent tuple instead of stitching together columns from different
+  parents.
+- **Polymorphic FK** (Rails-style `*_type` + `*_id`): declared in
+  `seeder.yaml` (see [Configuration](#configuration)). `seeder` picks one
+  target table uniformly per row, then picks the id from that table's pool.
 - **Self-FK** (e.g., `employees.manager_id REFERENCES employees(id)`):
   `seeder` resolves these forward-references inside the batch. Each row's
   self-FK can point at a PK already generated earlier in the same batch;
@@ -264,10 +308,11 @@ a random parent PK for each FK column.
 
 ## Current scope
 
-Single-column FKs only. English and Japanese locales. No JSON/JSONB richer
-inference. Everything else — more locales, LLM-assisted text, polymorphic /
-composite FKs, alternate output modes, existing-DB statistics sampling —
-remains on the roadmap.
+Composite FKs and polymorphic associations (yaml-declared) are supported,
+along with `--output sql` / `--output ndjson` and `--stream --rate` for
+CDC-style continuous load. English and Japanese locales. JSON / JSONB
+columns still emit randomly-structured placeholder values. Out of scope for
+now: more locales, LLM-assisted text, existing-DB statistics sampling.
 
 ## Develop
 

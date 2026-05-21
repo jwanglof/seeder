@@ -34,6 +34,22 @@ type Options struct {
 	Seed            *uint64
 	Locale          infer.Locale
 	ColumnOverrides map[string]map[string]ColumnOverride
+	// Polymorphic maps a table to its declared polymorphic associations.
+	// Targets are pre-resolved by the caller (CLI), so IDCol is always set.
+	Polymorphic map[string][]PolymorphicSpec
+	// OutputMode redirects writes instead of touching the database.
+	// "" → DB insert (default), "sql" → INSERT statements, "ndjson" → NDJSON.
+	OutputMode string
+	// OutputWriter is the destination for OutputMode != "". When nil, the
+	// out writer passed to Run is used.
+	OutputWriter io.Writer
+	// SkipPoolRefresh keeps insertTable from issuing Driver.ColumnValues
+	// after every table flush. CDC streaming sets it so each tick stays
+	// O(batch) instead of O(table). The pool is fed from the rows just
+	// inserted (seeder-generated columns only); DB-managed columns such as
+	// IDENTITY / serial PKs do NOT propagate into the pool in this mode, so
+	// later FKs may stick to the values captured during the initial seed.
+	SkipPoolRefresh bool
 }
 
 const defaultBatchSize = 1000
@@ -43,11 +59,70 @@ type ColumnOverride struct {
 	Value     any
 }
 
+// PolymorphicSpec describes a Rails-style polymorphic association on the
+// owning table: TypeColumn holds Target.Type, IDColumn holds the picked
+// row's IDCol value. Resolved by the CLI from PolymorphicConfig in yaml.
+type PolymorphicSpec struct {
+	TypeColumn string
+	IDColumn   string
+	Targets    []PolymorphicTarget
+}
+
+type PolymorphicTarget struct {
+	Table string
+	Type  string
+	IDCol string
+}
+
 type Stats struct {
 	Table string
 	Rows  int64
 	Took  time.Duration
 }
+
+// fkSpec is shared across every column belonging to the same foreign key.
+// For composite FKs every member column's colSpec.fk points at the same
+// instance, so a row's picker resolves the parent tuple once and spreads
+// referenced values across the local columns at consistent indices.
+type fkSpec struct {
+	referencedTable   string
+	referencedColumns []string
+	localCols         []string
+	allNullable       bool
+}
+
+type colSpec struct {
+	name     string
+	nullable bool
+	// gen is non-nil for seeder-generated columns. FK and polymorphic
+	// columns leave it nil and resolve through fk / poly.
+	gen      generator.Func
+	fk       *fkSpec
+	fkIdx    int // position within fk.localCols / fk.referencedColumns
+	poly     *polySpec
+	polyKind polyColKind
+}
+
+type polySpec struct {
+	typeCol     string
+	idCol       string
+	targets     []polyTarget
+	allNullable bool
+}
+
+type polyTarget struct {
+	table string
+	typ   string
+	idCol string
+}
+
+type polyColKind int
+
+const (
+	polyColNone polyColKind = iota
+	polyColType
+	polyColID
+)
 
 func Run(
 	ctx context.Context,
@@ -57,7 +132,7 @@ func Run(
 	opts Options,
 	out io.Writer,
 ) ([]Stats, error) {
-	drv, err := openDriver(ctx, dataSourceName)
+	drv, err := openDriver(ctx, dataSourceName, opts, schema, out)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +152,7 @@ func Run(
 	faker := gofakeit.New(seed)
 
 	pool := NewPool(0)
-	poolCols := fkPoolColumns(schema)
+	poolCols := fkPoolColumns(schema, opts.Polymorphic)
 
 	if opts.Truncate && !opts.DryRun {
 		if err := drv.Truncate(ctx, order); err != nil {
@@ -91,7 +166,7 @@ func Run(
 		if !ok {
 			return stats, fmt.Errorf("table %q not in schema", name)
 		}
-		s, err := insertTable(ctx, drv, t, opts, faker, pool, poolCols[name], out)
+		s, err := insertTable(ctx, drv, t, opts.Polymorphic[name], opts, faker, pool, poolCols[name], out)
 		if err != nil {
 			return stats, fmt.Errorf("insert %s: %w", name, err)
 		}
@@ -101,7 +176,7 @@ func Run(
 	return stats, nil
 }
 
-func fkPoolColumns(schema introspect.Schema) map[string][]string {
+func fkPoolColumns(schema introspect.Schema, polys map[string][]PolymorphicSpec) map[string][]string {
 	out := make(map[string][]string, len(schema.Tables))
 	add := func(table, col string) {
 		if !slices.Contains(out[table], col) {
@@ -120,56 +195,128 @@ func fkPoolColumns(schema introspect.Schema) map[string][]string {
 			}
 		}
 	}
+	for _, ps := range polys {
+		for _, p := range ps {
+			for _, target := range p.Targets {
+				add(target.Table, target.IDCol)
+			}
+		}
+	}
 
 	return out
 }
 
-type colSpec struct {
-	name     string
-	nullable bool
-	// gen is non-nil for a column whose value seeder generates itself.
-	// gen is nil for FK columns; in that case `fk` is meaningful.
-	gen generator.Func
-	fk  fkSpec
-}
-
-type fkSpec struct {
-	table string
-	col   string
-}
-
+// planColumns inspects t and returns the columns seeder will fill.
+//
+// keepDBManaged controls whether IDENTITY columns and Postgres `nextval(...)`
+// defaults are seeder-generated. In normal DB mode the DB owns those values
+// so we skip them; in output mode (--output sql / ndjson) there is no DB to
+// assign them, so we generate values ourselves to keep downstream FK / poly
+// pools populated.
 func planColumns(
-	t introspect.Table, faker *gofakeit.Faker,
-	locale infer.Locale, overrides map[string]ColumnOverride,
+	t introspect.Table,
+	polys []PolymorphicSpec,
+	faker *gofakeit.Faker,
+	locale infer.Locale,
+	overrides map[string]ColumnOverride,
+	keepDBManaged bool,
 ) ([]colSpec, error) {
+	nullable := make(map[string]bool, len(t.Columns))
+	for _, c := range t.Columns {
+		nullable[c.Name] = c.Nullable
+	}
+
+	fkByCol := make(map[string]*fkSpec, len(t.ForeignKeys))
+	fkIdxByCol := make(map[string]int, len(t.ForeignKeys))
+	for _, fk := range t.ForeignKeys {
+		spec := &fkSpec{
+			referencedTable:   fk.ReferencedTable,
+			referencedColumns: slices.Clone(fk.ReferencedColumns),
+			localCols:         slices.Clone(fk.Columns),
+			allNullable:       true,
+		}
+		for _, lc := range fk.Columns {
+			if !nullable[lc] {
+				spec.allNullable = false
+
+				break
+			}
+		}
+		for i, c := range fk.Columns {
+			fkByCol[c] = spec
+			fkIdxByCol[c] = i
+		}
+	}
+
+	polyByCol := make(map[string]*polySpec, len(polys))
+	polyKindByCol := make(map[string]polyColKind, len(polys))
+	for _, p := range polys {
+		spec := &polySpec{
+			typeCol:     p.TypeColumn,
+			idCol:       p.IDColumn,
+			allNullable: nullable[p.TypeColumn] && nullable[p.IDColumn],
+		}
+		for _, tg := range p.Targets {
+			spec.targets = append(spec.targets, polyTarget{
+				table: tg.Table,
+				typ:   tg.Type,
+				idCol: tg.IDCol,
+			})
+		}
+		polyByCol[p.TypeColumn] = spec
+		polyKindByCol[p.TypeColumn] = polyColType
+		polyByCol[p.IDColumn] = spec
+		polyKindByCol[p.IDColumn] = polyColID
+	}
+
 	cols := make([]colSpec, 0, len(t.Columns))
 	for _, c := range t.Columns {
-		if c.IsIdentity {
+		if c.IsIdentity && !keepDBManaged {
 			continue
 		}
-		// FK columns always go through the FK pool, even when they have a
-		// default or a yaml override (the override is intentionally ignored).
-		if fk, ok := findFK(t, c.Name); ok {
-			cols = append(cols, colSpec{name: c.Name, nullable: c.Nullable, fk: fk})
+		if spec, ok := fkByCol[c.Name]; ok {
+			cols = append(cols, colSpec{
+				name: c.Name, nullable: c.Nullable,
+				fk: spec, fkIdx: fkIdxByCol[c.Name],
+			})
+
 			continue
 		}
-		ov := overrides[c.Name]
-		hasOverride := ov.Generator != "" || ov.Value != nil
-		// A yaml override wins over the serial-default skip; the user
-		// asked for a specific value/generator, so honor it.
-		if !hasOverride && isSerialDefault(c.Default) {
+		if spec, ok := polyByCol[c.Name]; ok {
+			cols = append(cols, colSpec{
+				name: c.Name, nullable: c.Nullable,
+				poly: spec, polyKind: polyKindByCol[c.Name],
+			})
+
 			continue
 		}
 
-		spec := colSpec{name: c.Name, nullable: c.Nullable}
+		ov := overrides[c.Name]
+		hasOverride := ov.Generator != "" || ov.Value != nil
+		if !hasOverride && isSerialDefault(c.Default) && !keepDBManaged {
+			continue
+		}
+
+		// In output mode the DB does not assign identity / serial values, so
+		// the seeder has to pick them. Single-column primary keys are unique
+		// by definition; flag them so the generator picks a collision-aware
+		// strategy and the emitted SQL/NDJSON respects the PK constraint.
+		col := c
+		if keepDBManaged && !col.IsUnique &&
+			(col.IsIdentity || isSerialDefault(col.Default)) &&
+			isSingleColumnPK(t, col.Name) {
+			col.IsUnique = true
+		}
+
+		spec := colSpec{name: col.Name, nullable: col.Nullable}
 		if hasOverride {
 			gen, err := overrideGenerator(faker, ov)
 			if err != nil {
-				return nil, fmt.Errorf("column %s: %w", c.Name, err)
+				return nil, fmt.Errorf("column %s: %w", col.Name, err)
 			}
 			spec.gen = gen
 		} else {
-			spec.gen = infer.Pick(faker, c, locale)
+			spec.gen = infer.Pick(faker, col, locale)
 		}
 		cols = append(cols, spec)
 	}
@@ -194,22 +341,51 @@ func isSerialDefault(def *string) bool {
 	return def != nil && strings.HasPrefix(*def, "nextval(")
 }
 
-func findFK(t introspect.Table, column string) (fkSpec, bool) {
-	for _, fk := range t.ForeignKeys {
-		for i, c := range fk.Columns {
-			if c == column {
-				return fkSpec{table: fk.ReferencedTable, col: fk.ReferencedColumns[i]}, true
-			}
+func isSingleColumnPK(t introspect.Table, name string) bool {
+	return len(t.PrimaryKey) == 1 && t.PrimaryKey[0] == name
+}
+
+// poolRowsFromBatch projects a freshly-generated batch onto the pool-column
+// set. Used by stream mode to feed the pool without re-fetching from the DB.
+// If any pool column is DB-managed (identity / serial) — i.e., not present
+// in cols — the function returns nil so the caller leaves the table's pool
+// alone. Emitting rows with missing columns would let downstream FK pickers
+// grab partial tuples and write NULLs for the missing referenced column.
+func poolRowsFromBatch(batch [][]any, cols []colSpec, poolCols []string) []map[string]any {
+	if len(batch) == 0 || len(poolCols) == 0 {
+		return nil
+	}
+	want := make(map[string]int, len(poolCols))
+	for _, c := range poolCols {
+		want[c] = -1
+	}
+	for i, c := range cols {
+		if _, ok := want[c.name]; ok {
+			want[c.name] = i
 		}
 	}
+	for _, idx := range want {
+		if idx < 0 {
+			return nil
+		}
+	}
+	out := make([]map[string]any, 0, len(batch))
+	for _, row := range batch {
+		m := make(map[string]any, len(poolCols))
+		for col, idx := range want {
+			m[col] = row[idx]
+		}
+		out = append(out, m)
+	}
 
-	return fkSpec{}, false
+	return out
 }
 
 func insertTable(
 	ctx context.Context,
 	drv Driver,
 	t introspect.Table,
+	polys []PolymorphicSpec,
 	opts Options,
 	faker *gofakeit.Faker,
 	pool Pool,
@@ -222,10 +398,10 @@ func insertTable(
 	}
 
 	if opts.Verbose {
-		explainTable(t, opts.ColumnOverrides[t.Name], out)
+		explainTable(t, polys, opts.ColumnOverrides[t.Name], opts.OutputMode != "", out)
 	}
 
-	cols, err := planColumns(t, faker, opts.Locale, opts.ColumnOverrides[t.Name])
+	cols, err := planColumns(t, polys, faker, opts.Locale, opts.ColumnOverrides[t.Name], opts.OutputMode != "")
 	if err != nil {
 		return Stats{Table: t.Name}, err
 	}
@@ -244,12 +420,12 @@ func insertTable(
 		return Stats{Table: t.Name, Rows: int64(rows)}, nil
 	}
 
-	// selfFKRefs lists columns referenced by a self-FK in this table; only
-	// those values need to be remembered for later rows.
 	selfFKRefs := make(map[string]bool)
 	for _, c := range cols {
-		if c.gen == nil && c.fk.table == t.Name {
-			selfFKRefs[c.fk.col] = true
+		if c.fk != nil && c.fk.referencedTable == t.Name {
+			for _, refCol := range c.fk.referencedColumns {
+				selfFKRefs[refCol] = true
+			}
 		}
 	}
 
@@ -263,16 +439,14 @@ func insertTable(
 		batchSize = defaultBatchSize
 	}
 
-	// inBatch is kept across batches so self-FK forward-reference behaves the
-	// same regardless of --batch-size (i.e., the seeded output is deterministic).
-	inBatch := make(map[string][]any)
+	inBatch := newBatchBuffer(selfFKRefs, defaultPoolCapacity)
 
 	var totalInserted int64
 	var totalTook time.Duration
 	remaining := rows
 	for remaining > 0 {
 		b := min(remaining, batchSize)
-		data, err := generateBatch(b, cols, faker, pool, inBatch, selfFKRefs, t.Name)
+		data, err := generateBatch(b, cols, faker, pool, inBatch, t.Name)
 		if err != nil {
 			return Stats{Table: t.Name, Rows: totalInserted, Took: totalTook}, err
 		}
@@ -285,9 +459,13 @@ func insertTable(
 		totalTook += time.Since(start)
 		totalInserted += n
 		remaining -= b
+
+		if opts.SkipPoolRefresh && len(poolCols) > 0 {
+			pool.Append(t.Name, poolRowsFromBatch(data, cols, poolCols))
+		}
 	}
 
-	if len(poolCols) > 0 {
+	if !opts.SkipPoolRefresh && len(poolCols) > 0 {
 		vals, err := drv.ColumnValues(ctx, t.Name, poolCols)
 		if err != nil {
 			return Stats{Table: t.Name, Rows: totalInserted, Took: totalTook}, fmt.Errorf("column values: %w", err)
@@ -300,103 +478,237 @@ func insertTable(
 	return Stats{Table: t.Name, Rows: totalInserted, Took: totalTook}, nil
 }
 
+// batchBuffer accumulates the columns referenced by self-FKs in this table,
+// row by row, so later rows in the same batch can forward-reference them.
+// Only refs-listed columns are remembered. The buffer is tail-trimmed to
+// cap, matching Pool's capacity policy.
+type batchBuffer struct {
+	refs map[string]bool
+	rows []map[string]any
+	cap  int
+}
+
+func newBatchBuffer(refs map[string]bool, capacity int) *batchBuffer {
+	return &batchBuffer{refs: refs, cap: capacity}
+}
+
+func (b *batchBuffer) push(row map[string]any) {
+	if len(row) == 0 {
+		return
+	}
+	b.rows = append(b.rows, row)
+	if len(b.rows) > b.cap {
+		b.rows = b.rows[len(b.rows)-b.cap:]
+	}
+}
+
+func (b *batchBuffer) refSet() map[string]bool { return b.refs }
+
+// rowsCovering returns the subset of buffered rows that hold every column
+// in cols. Self-FK pickers use this so they never pick an inBatch row
+// missing a column they need (which would otherwise emit a NULL into a
+// NOT NULL self-FK target).
+func (b *batchBuffer) rowsCovering(cols []string) []map[string]any {
+	out := make([]map[string]any, 0, len(b.rows))
+outer:
+	for _, row := range b.rows {
+		for _, c := range cols {
+			if _, ok := row[c]; !ok {
+				continue outer
+			}
+		}
+		out = append(out, row)
+	}
+
+	return out
+}
+
 func generateBatch(
 	n int,
 	cols []colSpec,
 	faker *gofakeit.Faker,
 	pool Pool,
-	inBatch map[string][]any,
-	selfFKRefs map[string]bool,
+	inBatch *batchBuffer,
 	tableName string,
 ) ([][]any, error) {
 	data := make([][]any, 0, n)
 	for range n {
 		row := make([]any, len(cols))
+
 		for j, c := range cols {
 			if c.gen != nil {
 				row[j] = c.gen()
 			}
 		}
+
+		pickedFK := make(map[*fkSpec]map[string]any)
+		absentFK := make(map[*fkSpec]bool)
 		for j, c := range cols {
-			if c.gen != nil {
+			if c.gen != nil || c.fk == nil {
 				continue
 			}
-			if c.fk.table == tableName {
-				val, err := pickSelfFK(faker, pool, inBatch, row, cols, c, tableName)
+			if _, done := pickedFK[c.fk]; !done && !absentFK[c.fk] {
+				var pickedRow map[string]any
+				var err error
+				if c.fk.referencedTable == tableName {
+					pickedRow, err = pickSelfFKRow(faker, pool, inBatch, row, cols, c.fk, tableName)
+				} else {
+					pickedRow, err = pickFKRow(faker, pool, c.fk, tableName)
+				}
 				if err != nil {
 					return nil, err
 				}
-				row[j] = val
-				continue
-			}
-			val, err := pickFK(faker, pool, c, tableName)
-			if err != nil {
-				return nil, err
-			}
-			row[j] = val
-		}
-		for j, c := range cols {
-			if c.gen != nil && selfFKRefs[c.name] {
-				inBatch[c.name] = append(inBatch[c.name], row[j])
-				if len(inBatch[c.name]) > defaultPoolCapacity {
-					inBatch[c.name] = inBatch[c.name][len(inBatch[c.name])-defaultPoolCapacity:]
+				if pickedRow == nil {
+					absentFK[c.fk] = true
+				} else {
+					pickedFK[c.fk] = pickedRow
 				}
 			}
+			if absentFK[c.fk] {
+				row[j] = nil
+
+				continue
+			}
+			row[j] = pickedFK[c.fk][c.fk.referencedColumns[c.fkIdx]]
 		}
+
+		pickedPoly := make(map[*polySpec]polyResolved)
+		absentPoly := make(map[*polySpec]bool)
+		for j, c := range cols {
+			if c.poly == nil {
+				continue
+			}
+			if _, done := pickedPoly[c.poly]; !done && !absentPoly[c.poly] {
+				resolved, err := pickPolymorphic(faker, pool, c.poly, tableName)
+				if err != nil {
+					return nil, err
+				}
+				if resolved == (polyResolved{}) {
+					absentPoly[c.poly] = true
+				} else {
+					pickedPoly[c.poly] = resolved
+				}
+			}
+			if absentPoly[c.poly] {
+				row[j] = nil
+
+				continue
+			}
+			p := pickedPoly[c.poly]
+			if c.polyKind == polyColType {
+				row[j] = p.typ
+			} else {
+				row[j] = p.id
+			}
+		}
+
+		if refs := inBatch.refSet(); len(refs) > 0 {
+			stash := make(map[string]any, len(refs))
+			for j, c := range cols {
+				if refs[c.name] {
+					stash[c.name] = row[j]
+				}
+			}
+			inBatch.push(stash)
+		}
+
 		data = append(data, row)
 	}
 
 	return data, nil
 }
 
-func pickFK(faker *gofakeit.Faker, pool Pool, c colSpec, tableName string) (any, error) {
-	vals := pool.Values(c.fk.table, c.fk.col)
-	if len(vals) == 0 {
-		if !c.nullable {
-			return nil, fmt.Errorf("FK target %s.%s has no rows but %s.%s is NOT NULL", c.fk.table, c.fk.col, tableName, c.name)
-		}
-
-		return nil, nil //nolint:nilnil // intentional NULL for a nullable FK with empty parent pool
+func pickFKRow(faker *gofakeit.Faker, pool Pool, fk *fkSpec, tableName string) (map[string]any, error) {
+	row := pool.PickRow(faker, fk.referencedTable)
+	if row != nil {
+		return row, nil
+	}
+	if !fk.allNullable {
+		return nil, fmt.Errorf(
+			"FK target %s has no rows but %s requires a value for (%s)",
+			fk.referencedTable, tableName, strings.Join(fk.localCols, ", "),
+		)
 	}
 
-	return vals[faker.IntRange(0, len(vals)-1)], nil
+	return nil, nil //nolint:nilnil // intentional NULL group for a fully-nullable FK with empty parent pool
 }
 
-func pickSelfFK(
+func pickSelfFKRow(
 	faker *gofakeit.Faker,
 	pool Pool,
-	inBatch map[string][]any,
+	inBatch *batchBuffer,
 	row []any,
 	cols []colSpec,
-	c colSpec,
+	fk *fkSpec,
 	tableName string,
-) (any, error) {
-	poolVals := pool.Values(c.fk.table, c.fk.col)
-	inBatchVals := inBatch[c.fk.col]
-	total := len(poolVals) + len(inBatchVals)
+) (map[string]any, error) {
+	poolRows := pool.Rows(fk.referencedTable)
+	// Only consider in-batch rows that carry every column this FK references.
+	// When a referenced column is DB-managed (or absent for another reason),
+	// its value is unknown until after the insert, so the corresponding rows
+	// must not feed this FK.
+	available := inBatch.rowsCovering(fk.referencedColumns)
+	total := len(poolRows) + len(available)
 	if total > 0 {
 		idx := faker.IntRange(0, total-1)
-		if idx < len(poolVals) {
-			return poolVals[idx], nil
+		if idx < len(poolRows) {
+			return poolRows[idx], nil
 		}
 
-		return inBatchVals[idx-len(poolVals)], nil
+		return available[idx-len(poolRows)], nil
 	}
 
-	if c.nullable {
-		return nil, nil //nolint:nilnil // intentional NULL for a nullable self-FK on the first batch row
+	if fk.allNullable {
+		return nil, nil //nolint:nilnil // intentional NULL group for fully-nullable self-FK on the first row
 	}
 
-	// Row 0 self-loop: only works when the referenced column is seeder-generated.
-	// IDENTITY / serial / FK-populated columns are unknown at this point.
-	if refVal, ok := lookupOwnRef(row, cols, c.fk.col); ok {
-		return refVal, nil
+	selfRow := make(map[string]any, len(fk.referencedColumns))
+	for _, refCol := range fk.referencedColumns {
+		v, ok := lookupOwnRef(row, cols, refCol)
+		if !ok {
+			return nil, fmt.Errorf(
+				"self-FK on %s (%s) is NOT NULL but no seeded values are available and %s.%s is not seeder-generated",
+				tableName, strings.Join(fk.localCols, ", "),
+				fk.referencedTable, refCol,
+			)
+		}
+		selfRow[refCol] = v
 	}
 
-	return nil, fmt.Errorf(
-		"self-FK %s.%s is NOT NULL but no seeded values are available and %s.%s is not seeder-generated",
-		tableName, c.name, c.fk.table, c.fk.col,
-	)
+	return selfRow, nil
+}
+
+type polyResolved struct {
+	typ string
+	id  any
+}
+
+func pickPolymorphic(
+	faker *gofakeit.Faker,
+	pool Pool,
+	spec *polySpec,
+	tableName string,
+) (polyResolved, error) {
+	if len(spec.targets) == 0 {
+		return polyResolved{}, fmt.Errorf(
+			"polymorphic spec on %s.(%s, %s) has no targets",
+			tableName, spec.typeCol, spec.idCol,
+		)
+	}
+	target := spec.targets[faker.IntRange(0, len(spec.targets)-1)]
+	row := pool.PickRow(faker, target.table)
+	if row == nil {
+		if spec.allNullable {
+			return polyResolved{}, nil
+		}
+
+		return polyResolved{}, fmt.Errorf(
+			"polymorphic target %s has no rows but %s.(%s, %s) requires a value",
+			target.table, tableName, spec.typeCol, spec.idCol,
+		)
+	}
+
+	return polyResolved{typ: target.typ, id: row[target.idCol]}, nil
 }
 
 func lookupOwnRef(row []any, cols []colSpec, refCol string) (any, bool) {
@@ -418,22 +730,52 @@ func joinColNames(cols []colSpec) string {
 	return strings.Join(names, ", ")
 }
 
-func explainTable(t introspect.Table, overrides map[string]ColumnOverride, out io.Writer) {
+func explainTable(
+	t introspect.Table,
+	polys []PolymorphicSpec,
+	overrides map[string]ColumnOverride,
+	keepDBManaged bool,
+	out io.Writer,
+) {
 	fmt.Fprintf(out, "  %s\n", t.Name)
 	for _, c := range t.Columns {
-		fmt.Fprintf(out, "    %s\t%s\n", c.Name, explainColumn(t, c, overrides[c.Name]))
+		fmt.Fprintf(out, "    %s\t%s\n", c.Name, explainColumn(t, polys, c, overrides[c.Name], keepDBManaged))
 	}
 }
 
-func explainColumn(t introspect.Table, c introspect.Column, ov ColumnOverride) string {
+func explainColumn(
+	t introspect.Table,
+	polys []PolymorphicSpec,
+	c introspect.Column,
+	ov ColumnOverride,
+	keepDBManaged bool,
+) string {
 	if c.IsIdentity {
+		if keepDBManaged {
+			return "generated: identity (output mode)"
+		}
 		return "skip: identity"
 	}
-	if fk, ok := findFK(t, c.Name); ok {
-		return fmt.Sprintf("fk: %s.%s", fk.table, fk.col)
+	for _, fk := range t.ForeignKeys {
+		for i, lc := range fk.Columns {
+			if lc == c.Name {
+				return fmt.Sprintf("fk: %s.%s", fk.ReferencedTable, fk.ReferencedColumns[i])
+			}
+		}
+	}
+	for _, p := range polys {
+		switch c.Name {
+		case p.TypeColumn:
+			return "polymorphic: type discriminator"
+		case p.IDColumn:
+			return "polymorphic: id (target picked at runtime)"
+		}
 	}
 	hasOverride := ov.Generator != "" || ov.Value != nil
 	if !hasOverride && isSerialDefault(c.Default) {
+		if keepDBManaged {
+			return "generated: serial default (output mode)"
+		}
 		return "skip: serial default"
 	}
 	switch {

@@ -12,6 +12,13 @@ import (
 // for ordering. Returns an error if a cyclic FK dependency (length >= 2)
 // is detected.
 func Build(tables []introspect.Table) ([]string, error) {
+	return BuildWithDeps(tables, nil)
+}
+
+// BuildWithDeps is Build plus extra non-FK dependencies (e.g., polymorphic
+// targets declared in seeder.yaml). extra[child] lists tables that must come
+// before child; entries that name an unknown or self table are dropped.
+func BuildWithDeps(tables []introspect.Table, extra map[string][]string) ([]string, error) {
 	names := make(map[string]struct{}, len(tables))
 	for _, t := range tables {
 		names[t.Name] = struct{}{}
@@ -32,6 +39,19 @@ func Build(tables []introspect.Table) ([]string, error) {
 			}
 			seen[fk.ReferencedTable] = struct{}{}
 			deps[t.Name] = append(deps[t.Name], fk.ReferencedTable)
+		}
+		for _, dep := range extra[t.Name] {
+			if dep == t.Name {
+				continue
+			}
+			if _, ok := names[dep]; !ok {
+				continue
+			}
+			if _, dup := seen[dep]; dup {
+				continue
+			}
+			seen[dep] = struct{}{}
+			deps[t.Name] = append(deps[t.Name], dep)
 		}
 	}
 
