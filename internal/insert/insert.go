@@ -125,7 +125,7 @@ func Run(
 	opts Options,
 	out io.Writer,
 ) ([]Stats, error) {
-	drv, err := openDriver(ctx, dataSourceName, opts, out)
+	drv, err := openDriver(ctx, dataSourceName, opts, schema, out)
 	if err != nil {
 		return nil, err
 	}

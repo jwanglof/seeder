@@ -122,7 +122,7 @@ seeder $DATABASE_URL --locale ja
 seeder $DATABASE_URL --cache /tmp/seeder-schema.gob --rows 5000
 ```
 
-**SQL dump for migration repos.** Emit INSERT statements instead of writing to the DB — useful when you want a reproducible `seed.sql` checked in alongside migrations. Dialect is chosen from the DSN scheme (`mysql://` or `postgres://`); no connection is opened beyond the initial introspection.
+**SQL dump for migration repos.** Emit INSERT statements instead of writing to the DB — useful when you want a reproducible `seed.sql` checked in alongside migrations. Dialect is chosen from the DSN scheme (`mysql://` or `postgres://`); no connection is opened beyond the initial introspection. On Postgres, INSERTs for tables with IDENTITY columns include `OVERRIDING SYSTEM VALUE` so dumps load into both `BY DEFAULT` and `ALWAYS` identity schemas. After loading a dump that supplies explicit values for `serial` / IDENTITY columns, run `setval(...)` on the backing sequences so subsequent inserts don't collide with the seeded ids (out of scope for the dump itself).
 
 ```bash
 seeder $DATABASE_URL --output sql --rows 100 > seed.sql
