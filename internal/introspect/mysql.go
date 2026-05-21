@@ -64,9 +64,14 @@ func (d *mySQLDriver) Introspect(ctx context.Context) (Schema, error) {
 	out := make([]Table, 0, len(names))
 	for _, n := range names {
 		t := tables[n]
+		pkIsSingle := len(t.PrimaryKey) == 1
 		for i := range t.Columns {
-			if uniques[t.Name][t.Columns[i].Name] {
-				t.Columns[i].IsUnique = true
+			c := &t.Columns[i]
+			if uniques[t.Name][c.Name] {
+				c.IsUnique = true
+			}
+			if pkIsSingle && c.Name == t.PrimaryKey[0] {
+				c.IsUnique = true
 			}
 		}
 		out = append(out, *t)
