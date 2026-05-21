@@ -101,6 +101,9 @@ func TestIntrospect_MySQL(t *testing.T) {
 	if emailCol.Nullable {
 		t.Errorf("users.email Nullable = true; want false")
 	}
+	if emailCol.MaxLength != 255 {
+		t.Errorf("users.email MaxLength = %d; want 255 (VARCHAR(255))", emailCol.MaxLength)
+	}
 
 	isActiveCol := findColumn(t, users, "is_active")
 	if isActiveCol.Kind != introspect.KindBool {
