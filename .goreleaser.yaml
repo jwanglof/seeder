@@ -33,6 +33,7 @@ brews:
   - name: seeder
     homepage: https://github.com/mickamy/seeder
     description: Populate your database with realistic fake data, one command.
+    directory: Formula
     install: |
       bin.install "seeder"
     repository:
