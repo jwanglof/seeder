@@ -83,7 +83,8 @@ SELECT
     c.column_type,
     c.is_nullable,
     c.column_default,
-    c.extra
+    c.extra,
+    c.character_maximum_length
 FROM information_schema.tables t
 JOIN information_schema.columns c
   ON c.table_schema = t.table_schema
@@ -106,8 +107,9 @@ func (d *mySQLDriver) fetchTablesWithColumns(ctx context.Context) (map[string]*T
 			tname, cname, dataType, columnType string
 			isNullable, extra                  string
 			colDefault                         sql.NullString
+			maxLen                             sql.NullInt64
 		)
-		if err := rows.Scan(&tname, &cname, &dataType, &columnType, &isNullable, &colDefault, &extra); err != nil {
+		if err := rows.Scan(&tname, &cname, &dataType, &columnType, &isNullable, &colDefault, &extra, &maxLen); err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
 		}
 		t, ok := tables[tname]
@@ -121,6 +123,10 @@ func (d *mySQLDriver) fetchTablesWithColumns(ctx context.Context) (map[string]*T
 			s := colDefault.String
 			defaultVal = &s
 		}
+		var maxLength int
+		if maxLen.Valid {
+			maxLength = int(maxLen.Int64)
+		}
 		t.Columns = append(t.Columns, Column{
 			Name:       cname,
 			DataType:   dataType,
@@ -129,6 +135,7 @@ func (d *mySQLDriver) fetchTablesWithColumns(ctx context.Context) (map[string]*T
 			Nullable:   isNullable == "YES",
 			Default:    defaultVal,
 			IsIdentity: strings.Contains(strings.ToLower(extra), "auto_increment"),
+			MaxLength:  maxLength,
 		})
 	}
 	if err := rows.Err(); err != nil {

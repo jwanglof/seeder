@@ -113,7 +113,8 @@ SELECT
     c.udt_name,
     c.is_nullable,
     c.column_default,
-    c.is_identity
+    c.is_identity,
+    c.character_maximum_length
 FROM information_schema.tables t
 JOIN information_schema.columns c
   ON c.table_schema = t.table_schema
@@ -136,8 +137,9 @@ func (d *postgresDriver) fetchTablesWithColumns(ctx context.Context) (map[string
 			tname, cname, dataType, udtName string
 			isNullable, isIdentity          string
 			colDefault                      sql.NullString
+			maxLen                          sql.NullInt64
 		)
-		if err := rows.Scan(&tname, &cname, &dataType, &udtName, &isNullable, &colDefault, &isIdentity); err != nil {
+		if err := rows.Scan(&tname, &cname, &dataType, &udtName, &isNullable, &colDefault, &isIdentity, &maxLen); err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
 		}
 		t, ok := tables[tname]
@@ -150,6 +152,10 @@ func (d *postgresDriver) fetchTablesWithColumns(ctx context.Context) (map[string
 			s := colDefault.String
 			defaultVal = &s
 		}
+		var maxLength int
+		if maxLen.Valid {
+			maxLength = int(maxLen.Int64)
+		}
 		t.Columns = append(t.Columns, Column{
 			Name:       cname,
 			DataType:   dataType,
@@ -157,6 +163,7 @@ func (d *postgresDriver) fetchTablesWithColumns(ctx context.Context) (map[string
 			Nullable:   isNullable == "YES",
 			Default:    defaultVal,
 			IsIdentity: isIdentity == "YES",
+			MaxLength:  maxLength,
 		})
 	}
 	if err := rows.Err(); err != nil {
