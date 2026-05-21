@@ -37,7 +37,10 @@ func openDriver(
 		switch opts.OutputMode {
 		case "sql":
 			if scheme != "mysql" && scheme != "postgres" && scheme != "postgresql" {
-				return nil, fmt.Errorf("--output=sql needs mysql:// or postgres:// to choose the SQL dialect (got %q)", scheme)
+				return nil, fmt.Errorf(
+					"--output=sql needs a mysql:// / postgres:// / postgresql:// DSN to choose the SQL dialect (got %q)",
+					scheme,
+				)
 			}
 			return newSQLOutputDriver(w, scheme, schema), nil
 		case "ndjson":
