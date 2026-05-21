@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/brianvoe/gofakeit/v7"
 
@@ -300,6 +301,9 @@ const (
 	// etc.) and emits a zero-padded counter instead. Below this width the
 	// base would be truncated past recognition anyway.
 	genericTightThreshold = 16
+	// uniqueSuffixMinUUID is the minimum number of UUID characters reserved
+	// after the "-" separator so the suffix always contributes to uniqueness.
+	uniqueSuffixMinUUID = 8
 )
 
 // uniqueEmailString keeps the "<uuid>@example.com" shape when MaxLength allows,
@@ -349,9 +353,12 @@ func uniqueImageString(f *gofakeit.Faker, maxLen int) generator.Func {
 	return counterString(maxLen)
 }
 
-// uniqueGenericString stitches "<base>-<uuid>" but trims the combined string
-// to MaxLength, and uses a zero-padded counter when MaxLength is too tight to
-// preserve both base and a useful UUID suffix.
+// uniqueGenericString stitches "<base>-<uuid>" while reserving room for a
+// separator and at least uniqueSuffixMinUUID UUID characters, so the UUID
+// portion always survives and keeps the value distinct. Trimming the base
+// happens in rune units to avoid splitting a multi-byte UTF-8 character.
+// When MaxLength is too tight to keep both base and a useful UUID suffix, the
+// generator falls back to a zero-padded counter instead.
 func uniqueGenericString(f *gofakeit.Faker, base generator.Func, maxLen int) generator.Func {
 	if maxLen <= 0 {
 		return func() any {
@@ -372,12 +379,18 @@ func uniqueGenericString(f *gofakeit.Faker, base generator.Func, maxLen int) gen
 		if !ok {
 			v = f.UUID()
 		}
-		combined := v + "-" + f.UUID()
-		if len(combined) <= maxLen {
-			return combined
+		baseRoom := maxLen - 1 - uniqueSuffixMinUUID // reserve "-" + min UUID chars
+		runes := []rune(v)
+		if len(runes) > baseRoom {
+			v = string(runes[:baseRoom])
+		}
+		uuidRoom := min(maxLen-utf8.RuneCountInString(v)-1, 36)
+		u := f.UUID()
+		if len(u) > uuidRoom {
+			u = u[:uuidRoom]
 		}
 
-		return combined[:maxLen]
+		return v + "-" + u
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/brianvoe/gofakeit/v7"
 
@@ -307,6 +308,44 @@ func TestPick_UniqueImage_RespectsMaxLength(t *testing.T) {
 		}
 		if !strings.HasPrefix(s, "https://picsum.photos/seed/") || !strings.HasSuffix(s, "/200/200") {
 			t.Errorf("step %d: value %q lost picsum URL skeleton", i, s)
+		}
+		if seen[s] {
+			t.Fatalf("step %d: value collided: %s", i, s)
+		}
+		seen[s] = true
+	}
+}
+
+// Multi-byte base values (e.g., ja-locale names) must be truncated on rune
+// boundaries so the output stays valid UTF-8, and the UUID suffix must survive
+// even when the base is long enough to fill MaxLength on its own.
+func TestPick_UniqueString_RespectsMaxLength_CJK(t *testing.T) {
+	t.Parallel()
+
+	f := gofakeit.New(42)
+	col := introspect.Column{
+		Name:      "full_name",
+		Kind:      introspect.KindString,
+		IsUnique:  true,
+		MaxLength: 20,
+	}
+	gen := infer.Pick(f, col, infer.LocaleJA)
+
+	seen := make(map[string]bool, 200)
+	for i := range 200 {
+		v := gen()
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("step %d: value = %T; want string", i, v)
+		}
+		if !utf8.ValidString(s) {
+			t.Fatalf("step %d: value %q is not valid UTF-8", i, s)
+		}
+		if got := utf8.RuneCountInString(s); got > col.MaxLength {
+			t.Fatalf("step %d: value %q rune count %d exceeds MaxLength %d", i, s, got, col.MaxLength)
+		}
+		if !strings.Contains(s, "-") {
+			t.Errorf("step %d: value %q lost UUID suffix", i, s)
 		}
 		if seen[s] {
 			t.Fatalf("step %d: value collided: %s", i, s)
