@@ -455,9 +455,26 @@ func (b *batchBuffer) push(row map[string]any) {
 	}
 }
 
-func (b *batchBuffer) len() int                { return len(b.rows) }
-func (b *batchBuffer) at(i int) map[string]any { return b.rows[i] }
 func (b *batchBuffer) refSet() map[string]bool { return b.refs }
+
+// rowsCovering returns the subset of buffered rows that hold every column
+// in cols. Self-FK pickers use this so they never pick an inBatch row
+// missing a column they need (which would otherwise emit a NULL into a
+// NOT NULL self-FK target).
+func (b *batchBuffer) rowsCovering(cols []string) []map[string]any {
+	out := make([]map[string]any, 0, len(b.rows))
+outer:
+	for _, row := range b.rows {
+		for _, c := range cols {
+			if _, ok := row[c]; !ok {
+				continue outer
+			}
+		}
+		out = append(out, row)
+	}
+
+	return out
+}
 
 func generateBatch(
 	n int,
@@ -579,14 +596,19 @@ func pickSelfFKRow(
 	tableName string,
 ) (map[string]any, error) {
 	poolRows := pool.Rows(fk.referencedTable)
-	total := len(poolRows) + inBatch.len()
+	// Only consider in-batch rows that carry every column this FK references.
+	// When a referenced column is DB-managed (or absent for another reason),
+	// its value is unknown until after the insert, so the corresponding rows
+	// must not feed this FK.
+	available := inBatch.rowsCovering(fk.referencedColumns)
+	total := len(poolRows) + len(available)
 	if total > 0 {
 		idx := faker.IntRange(0, total-1)
 		if idx < len(poolRows) {
 			return poolRows[idx], nil
 		}
 
-		return inBatch.at(idx - len(poolRows)), nil
+		return available[idx-len(poolRows)], nil
 	}
 
 	if fk.allNullable {
