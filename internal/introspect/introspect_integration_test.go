@@ -24,6 +24,7 @@ CREATE TABLE users (
     id         serial      PRIMARY KEY,
     email      text        NOT NULL,
     name       text,
+    username   varchar(32),
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -81,7 +82,7 @@ func TestIntrospect(t *testing.T) {
 	for _, c := range users.Columns {
 		gotCols = append(gotCols, c.Name)
 	}
-	wantCols := []string{"id", "email", "name", "created_at"}
+	wantCols := []string{"id", "email", "name", "username", "created_at"}
 	if !reflect.DeepEqual(gotCols, wantCols) {
 		t.Errorf("users columns = %v; want %v", gotCols, wantCols)
 	}
@@ -100,6 +101,13 @@ func TestIntrospect(t *testing.T) {
 	emailCol := findColumn(t, users, "email")
 	if emailCol.Nullable {
 		t.Errorf("users.email Nullable = true; want false")
+	}
+	if emailCol.MaxLength != 0 {
+		t.Errorf("users.email MaxLength = %d; want 0 (text is unlimited on Postgres)", emailCol.MaxLength)
+	}
+	usernameCol := findColumn(t, users, "username")
+	if usernameCol.MaxLength != 32 {
+		t.Errorf("users.username MaxLength = %d; want 32 (varchar(32))", usernameCol.MaxLength)
 	}
 
 	orders := findTable(t, schema, "orders")
