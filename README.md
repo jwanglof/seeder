@@ -110,31 +110,40 @@ dropdb mydb && createdb mydb && goose up && seeder $DATABASE_URL --rows 5000
     go test -tags=integration ./...
 ```
 
-**Japanese-locale data.** Swap inferred names, addresses, prefectures, phone numbers, and postal codes for plausible Japanese values.
+**Japanese-locale data.** Swap inferred names, addresses, prefectures, phone numbers, and postal codes for plausible
+Japanese values.
 
 ```bash
 seeder $DATABASE_URL --locale ja
 ```
 
-**Large schemas / repeated runs.** Cache the introspected schema so subsequent runs skip the `information_schema` round-trip. Delete the file after a migration to invalidate.
+**Large schemas / repeated runs.** Cache the introspected schema so subsequent runs skip the `information_schema`
+round-trip. Delete the file after a migration to invalidate.
 
 ```bash
 seeder $DATABASE_URL --cache /tmp/seeder-schema.gob --rows 5000
 ```
 
-**SQL dump for migration repos.** Emit INSERT statements instead of writing to the DB — useful when you want a reproducible `seed.sql` checked in alongside migrations. Dialect is chosen from the DSN scheme (`mysql://` or `postgres://`); no connection is opened beyond the initial introspection. On Postgres, INSERTs for tables with IDENTITY columns include `OVERRIDING SYSTEM VALUE` so dumps load into both `BY DEFAULT` and `ALWAYS` identity schemas. After loading a dump that supplies explicit values for `serial` / IDENTITY columns, run `setval(...)` on the backing sequences so subsequent inserts don't collide with the seeded ids (out of scope for the dump itself).
+**SQL dump for migration repos.** Emit INSERT statements instead of writing to the DB — useful when you want a
+reproducible `seed.sql` checked in alongside migrations. Dialect is chosen from the DSN scheme (`mysql://` or
+`postgres://`); no connection is opened beyond the initial introspection. On Postgres, INSERTs for tables with IDENTITY
+columns include `OVERRIDING SYSTEM VALUE` so dumps load into both `BY DEFAULT` and `ALWAYS` identity schemas. After
+loading a dump that supplies explicit values for `serial` / IDENTITY columns, run `setval(...)` on the backing sequences
+so subsequent inserts don't collide with the seeded ids (out of scope for the dump itself).
 
 ```bash
 seeder $DATABASE_URL --output sql --rows 100 > seed.sql
 ```
 
-**ETL / streaming pipelines.** `--output ndjson` writes one JSON object per row, prefixed with `_table`, so downstream consumers can route rows by destination.
+**ETL / streaming pipelines.** `--output ndjson` writes one JSON object per row, prefixed with `_table`, so downstream
+consumers can route rows by destination.
 
 ```bash
 seeder $DATABASE_URL --output ndjson --rows 100 | kafkacat -P -t seed-stream
 ```
 
-**Continuous load / replication-lag testing.** `--stream --rate N` seeds the schema once, then keeps appending rows at roughly N total per second across all tables until Ctrl-C.
+**Continuous load / replication-lag testing.** `--stream --rate N` seeds the schema once, then keeps appending rows at
+roughly N total per second across all tables until Ctrl-C.
 
 ```bash
 seeder $DATABASE_URL --stream --rate 1000
@@ -142,7 +151,9 @@ seeder $DATABASE_URL --stream --rate 1000
 
 ## Configuration
 
-`seeder` runs zero-config out of the box. When you want to pin row counts or skip specific tables without retyping flags every time, drop a `seeder.yaml` next to where you run the command — it is auto-detected. Use `--config path/to/seeder.yaml` to point at one explicitly.
+`seeder` runs zero-config out of the box. When you want to pin row counts or skip specific tables without retyping flags
+every time, drop a `seeder.yaml` next to where you run the command — it is auto-detected. Use
+`--config path/to/seeder.yaml` to point at one explicitly.
 
 ```yaml
 version: 1
@@ -164,33 +175,43 @@ tables:
     exclude: true
 ```
 
-Precedence is **CLI flag > seeder.yaml > built-in default**. Setting `--rows N` on the command line replaces yaml's row counts for every table; omit it to let per-table values in `tables.<name>.rows` take effect. A full example with comments lives at [`seeder.example.yaml`](./seeder.example.yaml).
+Precedence is **CLI flag > seeder.yaml > built-in default**. Setting `--rows N` on the command line replaces yaml's row
+counts for every table; omit it to let per-table values in `tables.<name>.rows` take effect. A full example with
+comments lives at [`seeder.example.yaml`](./seeder.example.yaml).
 
 Per-column overrides under `tables.<name>.columns.<col>` bypass inference for a single column. Set exactly one of:
 
-- `generator: <Name>` — force a built-in generator (e.g., `Email`, `UUID`, `Phone`, `PastDate`). Supplying an unknown name surfaces the full known list as part of the preflight error. Built-ins resolve via gofakeit defaults and do not switch on `--locale`; use `value:` for a fixed string when you need a specific locale.
+- `generator: <Name>` — force a built-in generator (e.g., `Email`, `UUID`, `Phone`, `PastDate`). Supplying an unknown
+  name surfaces the full known list as part of the preflight error. Built-ins resolve via gofakeit defaults and do not
+  switch on `--locale`; use `value:` for a fixed string when you need a specific locale.
 - `value: <literal>` — pin the column to a fixed yaml value (string, number, bool).
 
-Foreign-key columns are not overridable: yaml entries for them are ignored and the FK pool is used instead, so children still point at real parents.
+Foreign-key columns are not overridable: yaml entries for them are ignored and the FK pool is used instead, so children
+still point at real parents.
 
-Polymorphic associations (Rails-style `*_type` + `*_id` pairs) cannot be detected from `information_schema` alone, so declare them under `tables.<name>.polymorphic`. Each entry picks one target table uniformly per row, then takes its id from the FK pool:
+Polymorphic associations (Rails-style `*_type` + `*_id` pairs) cannot be detected from `information_schema` alone, so
+declare them under `tables.<name>.polymorphic`. Each entry picks one target table uniformly per row, then takes its id
+from the FK pool:
 
 ```yaml
 tables:
   comments:
     polymorphic:
       - type_col: commentable_type
-        id_col:   commentable_id
+        id_col: commentable_id
         targets:
           - { table: posts,    type: Post }
           - { table: articles, type: Article }
 ```
 
-`id_col` on a target defaults to that table's first primary-key column; set `id_col: <col>` on the target to point at a different column (which must be in the FK pool, e.g., a `UNIQUE` non-PK column). `seeder` also adds the target tables as plan dependencies, so parents are seeded before the polymorphic owner.
+`id_col` on a target defaults to that table's first primary-key column; set `id_col: <col>` on the target to point at a
+different column (which must be in the FK pool, e.g., a `UNIQUE` non-PK column). `seeder` also adds the target tables as
+plan dependencies, so parents are seeded before the polymorphic owner.
 
 The yaml `locale` field is equivalent to the `--locale` flag and follows the same precedence.
 
-Pass `--verbose` to see which inference rule each column matched, e.g., when you are debugging why `bio` ended up with a long paragraph instead of the short string you expected:
+Pass `--verbose` to see which inference rule each column matched, e.g., when you are debugging why `bio` ended up with a
+long paragraph instead of the short string you expected:
 
 ```
 $ seeder $DATABASE_URL --rows 5 --verbose
@@ -221,26 +242,27 @@ schema changes, no privileged access — just standard SELECTs.
 Each column is matched against a small set of name patterns first, then
 falls back to its SQL type:
 
-| Pattern                                                | Generator                 |
-|--------------------------------------------------------|---------------------------|
-| `email`, `*_email`                                     | realistic email address   |
-| `name`, `first_name`, `last_name`, `display_name`, ... | person name               |
-| `phone`, `tel`, `mobile`                               | phone number              |
-| `*_url`, `link`, `homepage`, `website`                 | URL                       |
-| `avatar`, `image`, `photo`, `picture`, `thumbnail` (also `_url`-suffixed) | image placeholder URL |
-| `address`, `city`, `country`, `zip`                    | postal address parts      |
-| `description`, `bio`, `note`, `body`, `content`        | paragraph                 |
-| `title`, `subject`, `headline`                         | sentence                  |
-| `created_at`, `updated_at`, `*_at`                     | timestamp in past year    |
-| `birthday`, `dob`                                      | past date                 |
-| `age`                                                  | 0–100                     |
-| `price`, `amount`, `cost`, `*_yen`                     | int in money range        |
-| `count`, `quantity`, `qty`, `num_*`                    | int                       |
-| `is_*`, `has_*`, `*_flag`, `enabled`                   | boolean                   |
-| Postgres enum (`USER-DEFINED`)                         | random label              |
-| anything else                                          | fallback by inferred Kind |
+| Pattern                                                                   | Generator                 |
+|---------------------------------------------------------------------------|---------------------------|
+| `email`, `*_email`                                                        | realistic email address   |
+| `name`, `first_name`, `last_name`, `display_name`, ...                    | person name               |
+| `phone`, `tel`, `mobile`                                                  | phone number              |
+| `*_url`, `link`, `homepage`, `website`                                    | URL                       |
+| `avatar`, `image`, `photo`, `picture`, `thumbnail` (also `_url`-suffixed) | image placeholder URL     |
+| `address`, `city`, `country`, `zip`                                       | postal address parts      |
+| `description`, `bio`, `note`, `body`, `content`                           | paragraph                 |
+| `title`, `subject`, `headline`                                            | sentence                  |
+| `created_at`, `updated_at`, `*_at`                                        | timestamp in past year    |
+| `birthday`, `dob`                                                         | past date                 |
+| `age`                                                                     | 0–100                     |
+| `price`, `amount`, `cost`, `*_yen`                                        | int in money range        |
+| `count`, `quantity`, `qty`, `num_*`                                       | int                       |
+| `is_*`, `has_*`, `*_flag`, `enabled`                                      | boolean                   |
+| Postgres enum (`USER-DEFINED`)                                            | random label              |
+| anything else                                                             | fallback by inferred Kind |
 
-Name patterns above that produce text (names, addresses, prefectures, cities, phone numbers, postal codes) switch dictionaries when `--locale ja` is set; locale-neutral patterns like `email` and `*_url` keep their English forms.
+Name patterns above that produce text (names, addresses, prefectures, cities, phone numbers, postal codes) switch
+dictionaries when `--locale ja` is set; locale-neutral patterns like `email` and `*_url` keep their English forms.
 
 `seeder` lets the database fill a column in exactly two cases:
 
@@ -264,11 +286,12 @@ top of the matched name rule, and integer columns are widened to a much
 larger range. Composite `UNIQUE` constraints are not flagged because no
 single per-column generator can guarantee combined uniqueness.
 
-> **Note on `json` / `jsonb` columns**: v0.1.0 emits randomly-structured
-> placeholder JSON via `gofakeit.JSON(nil)`. Each value can be a multi-KB
-> nested array/object, so seeding thousands of rows of `jsonb` is heavy on
-> memory and bulk-insert throughput. `--exclude` the table or expect a
-> slower run; per-column overrides are planned for v0.2.0.
+> **Note on `json` / `jsonb` columns**: by default these emit
+> randomly-structured placeholder JSON via `gofakeit.JSON(nil)`. Each value
+> can be a multi-KB nested array/object, so seeding thousands of rows of
+> `jsonb` is heavy on memory and bulk-insert throughput. Pin them with
+> `tables.<name>.columns.<col>.value: '{"k":"v"}'` in `seeder.yaml`, or
+> `--exclude` the table.
 
 > **Note on large `--rows`**: `seeder` generates rows in chunks of
 > `--batch-size` (default 1000) and flushes each chunk via `COPY` / multi-row
@@ -328,6 +351,11 @@ docker compose up -d
 SEEDER_TEST_DSN_MYSQL=mysql://root:pass@localhost:3306/dev?parseTime=true \
 SEEDER_TEST_DSN_POSTGRES=postgres://postgres:pass@localhost:5432/dev?sslmode=disable \
   make test-integration
+
+# Benchmarks (Postgres only; see bench/README.md for the current numbers)
+SEEDER_TEST_DSN_POSTGRES=postgres://postgres:pass@localhost:5432/dev?sslmode=disable \
+  go test -tags=integration -bench=. -benchmem -benchtime=5x -run=^$ \
+    ./internal/insert/...
 ```
 
 ## License
