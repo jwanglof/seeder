@@ -237,7 +237,8 @@ func (d *mySQLDriver) fetchForeignKeys(ctx context.Context, tables map[string]*T
 	return nil
 }
 
-// Returns every UNIQUE column; fetchSingleColumnUniques drops composite ones.
+// Returns every UNIQUE column; fetchUniques routes single-column constraints
+// to Column.IsUnique and keeps composite ones as Table.CompositeUniques.
 const mySQLUniquesQuery = `
 SELECT
     tc.constraint_name,
