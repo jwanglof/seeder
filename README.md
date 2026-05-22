@@ -71,6 +71,17 @@ Requires Go 1.26+ to build from source. Pre-built binaries (macOS / Linux /
 Windows × amd64 / arm64) are published on
 [GitHub Releases](https://github.com/mickamy/seeder/releases) on every tag.
 
+## Supported databases
+
+- **PostgreSQL 15+** — versions older than 15 are out of upstream maintenance. CI exercises the current major; older
+  releases may work but are not tested.
+- **MySQL 8.4+ (LTS)** — MySQL 8.0 reached community-server EOL in April 2026, so seeder targets 8.4 onward.
+  `column_type` parsing for `enum` / `set` literals and the `tinyint(1)` boolean convention follow MySQL 8 semantics.
+
+Both drivers connect through the standard DSN form (`postgres://...` or `mysql://...`) and use only read-only SELECTs
+against `information_schema` / `pg_catalog` plus normal INSERT / COPY / TRUNCATE statements — no privileged access
+needed.
+
 ## Usage
 
 ```
