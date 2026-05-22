@@ -365,6 +365,7 @@ func TestPick_UniqueString_VeryTight_CounterShape(t *testing.T) {
 	}
 	gen := infer.Pick(f, col, infer.LocaleEN)
 
+	const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 	seen := make(map[string]bool, 100)
 	for i := 1; i <= 100; i++ {
 		v := gen()
@@ -376,8 +377,8 @@ func TestPick_UniqueString_VeryTight_CounterShape(t *testing.T) {
 			t.Errorf("step %d: value %q length %d; want %d", i, s, len(s), col.MaxLength)
 		}
 		for _, r := range s {
-			if r < '0' || r > '9' {
-				t.Errorf("step %d: value %q contains non-digit %q", i, s, r)
+			if !strings.ContainsRune(alphabet, r) {
+				t.Errorf("step %d: value %q contains non-base62 rune %q", i, s, r)
 			}
 		}
 		if seen[s] {

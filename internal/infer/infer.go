@@ -421,38 +421,54 @@ func uniqueGenericString(f *gofakeit.Faker, base generator.Func, maxLen int) gen
 	}
 }
 
-// counterString returns a generator that emits a zero-padded numeric counter
+// counterAlphabet is the base62 character set used by counterString so a
+// width-N column has 62^N distinct values (~238k for varchar(3), 916M for
+// varchar(5)), letting the counter accommodate large row sets that would
+// otherwise wrap inside a numeric-only space (10^N).
+const counterAlphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+// counterString returns a generator that emits a base62-encoded counter
 // exactly maxLen characters wide. The counter starts at a faker-seeded random
-// offset (rather than 0) so re-running seeder in append mode against the same
-// table does not immediately collide with values inserted by a previous run.
-// The counter wraps within the column width, so very small widths (e.g.,
-// varchar(2)) eventually repeat.
+// offset so re-running seeder in append mode against the same table does not
+// immediately collide with values inserted by a previous run. The counter
+// wraps within the column's value space (62^maxLen), so widths smaller than
+// the row count eventually repeat.
 func counterString(f *gofakeit.Faker, maxLen int) generator.Func {
-	mod := counterMod(maxLen)
-	counter := f.Uint64() % mod
+	space := counterSpace(maxLen)
+	counter := f.Uint64() % space
 
 	return func() any {
 		counter++
 
-		return fmt.Sprintf("%0*d", maxLen, counter%mod)
+		return encodeBase62(counter%space, maxLen)
 	}
 }
 
-// counterMod returns 10^digits, capped at uint64 max for widths that exceed
-// what uint64 can represent.
-func counterMod(digits int) uint64 {
-	if digits <= 0 {
+// counterSpace returns 62^width, capped at uint64 max for widths that exceed
+// what uint64 can represent (62^11 already exceeds 2^64).
+func counterSpace(width int) uint64 {
+	if width <= 0 {
 		return 1
 	}
-	if digits >= 20 {
+	if width >= 11 {
 		return ^uint64(0)
 	}
 	var n uint64 = 1
-	for range digits {
-		n *= 10
+	for range width {
+		n *= 62
 	}
 
 	return n
+}
+
+func encodeBase62(v uint64, width int) string {
+	buf := make([]byte, width)
+	for i := width - 1; i >= 0; i-- {
+		buf[i] = counterAlphabet[v%62]
+		v /= 62
+	}
+
+	return string(buf)
 }
 
 // Explain reports which rule Pick will use for col; meant for --verbose output.
