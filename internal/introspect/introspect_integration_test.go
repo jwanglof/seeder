@@ -94,6 +94,9 @@ func TestIntrospect(t *testing.T) {
 	if idCol.Default == nil || !strings.HasPrefix(*idCol.Default, "nextval(") {
 		t.Errorf("users.id Default = %v; want non-nil with prefix nextval(", idCol.Default)
 	}
+	if !idCol.IsUnique {
+		t.Errorf("users.id IsUnique = false; want true (single-column PK)")
+	}
 	nameCol := findColumn(t, users, "name")
 	if !nameCol.Nullable {
 		t.Errorf("users.name Nullable = false; want true")

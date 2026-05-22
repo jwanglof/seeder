@@ -93,6 +93,9 @@ func TestIntrospect_MySQL(t *testing.T) {
 	if !idCol.IsIdentity {
 		t.Errorf("users.id IsIdentity = false; want true (AUTO_INCREMENT)")
 	}
+	if !idCol.IsUnique {
+		t.Errorf("users.id IsUnique = false; want true (single-column PK)")
+	}
 
 	emailCol := findColumn(t, users, "email")
 	if emailCol.Kind != introspect.KindString {

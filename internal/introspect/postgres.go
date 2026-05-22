@@ -56,6 +56,7 @@ func (d *postgresDriver) Introspect(ctx context.Context) (Schema, error) {
 	out := make([]Table, 0, len(names))
 	for _, n := range names {
 		t := tables[n]
+		pkIsSingle := len(t.PrimaryKey) == 1
 		for i := range t.Columns {
 			c := &t.Columns[i]
 			c.Kind = pgKind(c.DataType, c.UDTName, enumLabels)
@@ -63,6 +64,9 @@ func (d *postgresDriver) Introspect(ctx context.Context) (Schema, error) {
 				c.EnumValues = enumLabels[c.UDTName]
 			}
 			if uniques[t.Name][c.Name] {
+				c.IsUnique = true
+			}
+			if pkIsSingle && c.Name == t.PrimaryKey[0] {
 				c.IsUnique = true
 			}
 		}
