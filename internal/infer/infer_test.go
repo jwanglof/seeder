@@ -378,6 +378,45 @@ func TestPick_UniqueString_VeryTight_CounterShape(t *testing.T) {
 	}
 }
 
+// Non-UNIQUE int columns with no name-rule match must respect the column's
+// declared width: tinyint / smallint were overflowing the default range.
+func TestPick_Int_RespectsDataType(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		dataType   string
+		maxAllowed int
+	}{
+		{"tinyint", 127},
+		{"smallint", 32767},
+		{"mediumint", 8388607},
+		{"int", 100000},
+		{"bigint", 100000},
+	}
+	for _, tc := range cases {
+		t.Run(tc.dataType, func(t *testing.T) {
+			t.Parallel()
+			f := gofakeit.New(42)
+			col := introspect.Column{
+				Name:     "method",
+				Kind:     introspect.KindInt,
+				DataType: tc.dataType,
+			}
+			gen := infer.Pick(f, col, infer.LocaleEN)
+			for i := range 200 {
+				v := gen()
+				n, ok := v.(int)
+				if !ok {
+					t.Fatalf("step %d: value = %T; want int", i, v)
+				}
+				if n < 0 || n > tc.maxAllowed {
+					t.Fatalf("step %d: value %d out of range (max %d for %s)", i, n, tc.maxAllowed, tc.dataType)
+				}
+			}
+		})
+	}
+}
+
 func TestPick_EnumByKind(t *testing.T) {
 	t.Parallel()
 

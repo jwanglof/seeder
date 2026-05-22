@@ -234,6 +234,9 @@ func pickBase(f *gofakeit.Faker, col introspect.Column, locale Locale) generator
 
 		return func() any { return gen(f) }
 	}
+	if col.Kind == introspect.KindInt {
+		return generator.IntForColumn(f, col.DataType)
+	}
 
 	return generator.FromKind(f, col.Kind, col.EnumValues)
 }
