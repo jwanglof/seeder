@@ -72,3 +72,17 @@ func compositeKey(row []any, colIdx []int) string {
 
 	return b.String()
 }
+
+// compositeKeyForRow returns the dedup key for a row's constraint columns,
+// or skip=true when any participating column is nil. SQL UNIQUE treats NULL
+// participants as never colliding (multiple NULLs are allowed under both
+// MySQL and Postgres), so callers must skip dedup for those tuples.
+func compositeKeyForRow(row []any, colIdx []int) (string, bool) {
+	for _, idx := range colIdx {
+		if row[idx] == nil {
+			return "", true
+		}
+	}
+
+	return compositeKey(row, colIdx), false
+}

@@ -87,3 +87,20 @@ func TestCompositeKey_HandlesMixedTypes(t *testing.T) {
 		t.Errorf("same tuple produced different keys: %q vs %q", a, b)
 	}
 }
+
+// SQL UNIQUE allows multiple NULLs (they are not considered equal), so the
+// dedup path must skip tuples that have any nil participant.
+func TestCompositeKeyForRow_SkipsNullParticipants(t *testing.T) {
+	t.Parallel()
+
+	cols := []int{0, 1}
+	if _, skip := compositeKeyForRow([]any{nil, "x"}, cols); !skip {
+		t.Errorf("expected skip=true when first column is nil")
+	}
+	if _, skip := compositeKeyForRow([]any{"a", nil}, cols); !skip {
+		t.Errorf("expected skip=true when second column is nil")
+	}
+	if _, skip := compositeKeyForRow([]any{"a", "b"}, cols); skip {
+		t.Errorf("expected skip=false when no column is nil")
+	}
+}

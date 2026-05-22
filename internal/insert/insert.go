@@ -535,6 +535,7 @@ func generateBatch(
 ) ([][]any, error) {
 	data := make([][]any, 0, n)
 	keys := make([]string, 0, len(composites))
+	skipFlags := make([]bool, 0, len(composites))
 	for range n {
 		var row []any
 		for attempts := 0; ; attempts++ {
@@ -545,18 +546,26 @@ func generateBatch(
 			}
 
 			keys = keys[:0]
+			skipFlags = skipFlags[:0]
 			collision := false
 			for _, cu := range composites {
-				key := compositeKey(row, cu.colIdx)
+				key, skip := compositeKeyForRow(row, cu.colIdx)
+				keys = append(keys, key)
+				skipFlags = append(skipFlags, skip)
+				if skip {
+					continue
+				}
 				if cu.seen[key] {
 					collision = true
 
 					break
 				}
-				keys = append(keys, key)
 			}
 			if !collision {
 				for i, cu := range composites {
+					if skipFlags[i] {
+						continue
+					}
 					cu.seen[keys[i]] = true
 				}
 
