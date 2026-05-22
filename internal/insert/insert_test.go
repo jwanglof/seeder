@@ -140,6 +140,28 @@ func TestPlanColumns_GeneratorOverrideAppliesToNonFKColumn(t *testing.T) {
 	}
 }
 
+func TestPlanColumns_OverrideOnGeneratedColumnErrors(t *testing.T) {
+	t.Parallel()
+
+	table := introspect.Table{
+		Name: "products",
+		Columns: []introspect.Column{
+			{Name: "price", Kind: introspect.KindInt, IsGenerated: true},
+		},
+	}
+	overrides := map[string]insert.ColumnOverride{
+		"price": {Value: 100},
+	}
+
+	_, err := insert.PlanColumns(table, nil, gofakeit.New(42), infer.LocaleEN, overrides, false)
+	if err == nil {
+		t.Fatalf("PlanColumns: nil error; want error for override on generated column")
+	}
+	if !strings.Contains(err.Error(), "generated column") {
+		t.Errorf("error %q does not mention generated column", err)
+	}
+}
+
 func TestPlanColumns_OverrideIgnoredForFKColumn(t *testing.T) {
 	t.Parallel()
 

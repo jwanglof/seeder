@@ -17,7 +17,7 @@ import (
 )
 
 var errNoWritableColumns = errors.New(
-	"no writable columns (all columns are identity or DB-managed sequence)",
+	"no writable columns (all columns are identity, DB-managed sequence, or generated)",
 )
 
 type Options struct {
@@ -274,6 +274,12 @@ func planColumns(
 	cols := make([]colSpec, 0, len(t.Columns))
 	for _, c := range t.Columns {
 		if c.IsGenerated {
+			if ov := overrides[c.Name]; ov.Generator != "" || ov.Value != nil {
+				return nil, fmt.Errorf(
+					"column %s: cannot override a generated column (DB computes the value)",
+					c.Name,
+				)
+			}
 			continue
 		}
 		if c.IsIdentity && !keepDBManaged {
