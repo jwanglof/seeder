@@ -86,3 +86,15 @@ func compositeKeyForRow(row []any, colIdx []int) (string, bool) {
 
 	return compositeKey(row, colIdx), false
 }
+
+// formatCollisionTuple renders a row's constraint columns as a human-readable
+// "v1, v2, ..." string for error messages so callers can see which values
+// kept colliding.
+func formatCollisionTuple(row []any, colIdx []int) string {
+	parts := make([]string, len(colIdx))
+	for i, idx := range colIdx {
+		parts[i] = fmt.Sprintf("%v", row[idx])
+	}
+
+	return strings.Join(parts, ", ")
+}

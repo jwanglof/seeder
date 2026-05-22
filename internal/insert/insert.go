@@ -548,6 +548,7 @@ func generateBatch(
 			keys = keys[:0]
 			skipFlags = skipFlags[:0]
 			collision := false
+			var collisionCU *compositeUniqueSpec
 			for _, cu := range composites {
 				key, skip := compositeKeyForRow(row, cu.colIdx)
 				keys = append(keys, key)
@@ -557,6 +558,7 @@ func generateBatch(
 				}
 				if cu.seen[key] {
 					collision = true
+					collisionCU = cu
 
 					break
 				}
@@ -573,8 +575,12 @@ func generateBatch(
 			}
 			if attempts+1 >= maxCompositeUniqueAttempts {
 				return nil, fmt.Errorf(
-					"composite UNIQUE collision in %s after %d attempts; reduce --rows or --exclude %s",
-					tableName, maxCompositeUniqueAttempts, tableName,
+					"composite UNIQUE (%s) collision in %s after %d attempts at tuple (%s); reduce --rows or --exclude %s",
+					strings.Join(collisionCU.constraint, ", "),
+					tableName,
+					maxCompositeUniqueAttempts,
+					formatCollisionTuple(row, collisionCU.colIdx),
+					tableName,
 				)
 			}
 		}
