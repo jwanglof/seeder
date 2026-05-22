@@ -271,6 +271,9 @@ func planColumns(
 
 	cols := make([]colSpec, 0, len(t.Columns))
 	for _, c := range t.Columns {
+		if c.IsGenerated {
+			continue
+		}
 		if c.IsIdentity && !keepDBManaged {
 			continue
 		}
@@ -812,6 +815,9 @@ func explainColumn(
 	ov ColumnOverride,
 	keepDBManaged bool,
 ) string {
+	if c.IsGenerated {
+		return "skip: generated"
+	}
 	if c.IsIdentity {
 		if keepDBManaged {
 			return "generated: identity (output mode)"

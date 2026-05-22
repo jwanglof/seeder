@@ -935,3 +935,59 @@ func TestRun_Truncate(t *testing.T) {
 		t.Errorf("users total = %d; want 20", total)
 	}
 }
+
+const generatedSchemaSQL = `
+DROP SCHEMA public CASCADE;
+CREATE SCHEMA public;
+
+CREATE TABLE products (
+    id     serial PRIMARY KEY,
+    name   text   NOT NULL,
+    cost   int    NOT NULL,
+    margin int    NOT NULL,
+    price  int    GENERATED ALWAYS AS (cost + margin) STORED
+);
+`
+
+//nolint:paralleltest,tparallel // mutates the public schema
+func TestRun_GeneratedColumnsAreSkipped(t *testing.T) {
+	dsn := os.Getenv("SEEDER_TEST_DSN_POSTGRES")
+	if dsn == "" {
+		t.Skip("SEEDER_TEST_DSN_POSTGRES not set")
+	}
+
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+
+	if _, err := conn.Exec(ctx, generatedSchemaSQL); err != nil {
+		t.Fatalf("apply schema: %v", err)
+	}
+
+	schema, err := introspect.Do(ctx, dsn)
+	if err != nil {
+		t.Fatalf("introspect: %v", err)
+	}
+	order, err := plan.Build(schema.Tables)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if _, err := insert.Run(ctx, dsn, schema, order, insert.Options{Rows: 25, Seed: new(uint64(42))}, &buf); err != nil {
+		t.Fatalf("insert.Run: %v", err)
+	}
+
+	var mismatches int
+	if err := conn.QueryRow(ctx,
+		"SELECT COUNT(*) FROM products WHERE price <> cost + margin",
+	).Scan(&mismatches); err != nil {
+		t.Fatalf("formula check: %v", err)
+	}
+	if mismatches != 0 {
+		t.Errorf("products with price <> cost + margin = %d; want 0 (DB recomputes generated column)", mismatches)
+	}
+}
