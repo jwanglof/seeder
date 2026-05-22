@@ -15,7 +15,7 @@ services:
       retries: 10
 
   postgres:
-    image: postgres:17
+    image: postgres:15
     environment:
       POSTGRES_PASSWORD: pass
       POSTGRES_DB: dev
