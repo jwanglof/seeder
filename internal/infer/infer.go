@@ -221,11 +221,34 @@ var nameRules = []nameRule{
 
 func Pick(f *gofakeit.Faker, col introspect.Column, locale Locale) generator.Func {
 	base := pickBase(f, col, locale)
+	if col.Kind == introspect.KindString && col.MaxLength > 0 {
+		base = trimStringToMaxLength(base, col.MaxLength)
+	}
 	if !col.IsUnique {
 		return base
 	}
 
 	return uniqueWrap(f, col, base)
+}
+
+// trimStringToMaxLength wraps a string generator so its output never exceeds
+// maxLen characters. Trimming happens on rune boundaries so multi-byte UTF-8
+// values (e.g., ja-locale names) stay valid. Non-string outputs pass through
+// unchanged — only string generators can overflow a varchar(N) declaration.
+func trimStringToMaxLength(g generator.Func, maxLen int) generator.Func {
+	return func() any {
+		v := g()
+		s, ok := v.(string)
+		if !ok {
+			return v
+		}
+		if utf8.RuneCountInString(s) <= maxLen {
+			return s
+		}
+		runes := []rune(s)
+
+		return string(runes[:maxLen])
+	}
 }
 
 func pickBase(f *gofakeit.Faker, col introspect.Column, locale Locale) generator.Func {

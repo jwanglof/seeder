@@ -378,6 +378,35 @@ func TestPick_UniqueString_VeryTight_CounterShape(t *testing.T) {
 	}
 }
 
+// Non-UNIQUE string columns must also respect MaxLength: name rules such as
+// `description` (LoremIpsumParagraph) generate paragraphs that easily exceed
+// a varchar(255) column.
+func TestPick_String_RespectsMaxLength_NonUnique(t *testing.T) {
+	t.Parallel()
+
+	f := gofakeit.New(42)
+	col := introspect.Column{
+		Name:      "description",
+		Kind:      introspect.KindString,
+		MaxLength: 100,
+	}
+	gen := infer.Pick(f, col, infer.LocaleEN)
+
+	for i := range 200 {
+		v := gen()
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("step %d: value = %T; want string", i, v)
+		}
+		if !utf8.ValidString(s) {
+			t.Fatalf("step %d: value %q is not valid UTF-8", i, s)
+		}
+		if got := utf8.RuneCountInString(s); got > col.MaxLength {
+			t.Fatalf("step %d: value %q rune count %d exceeds MaxLength %d", i, s, got, col.MaxLength)
+		}
+	}
+}
+
 // Non-UNIQUE int columns with no name-rule match must respect the column's
 // declared width: tinyint / smallint were overflowing the default range.
 func TestPick_Int_RespectsDataType(t *testing.T) {
