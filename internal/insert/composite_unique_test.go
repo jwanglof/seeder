@@ -63,6 +63,20 @@ func TestCompositeKey_DistinguishesTuples(t *testing.T) {
 	}
 }
 
+// Values that happen to contain the column separator must still produce
+// distinct keys for distinct tuples; length-prefix encoding guards against
+// the naive concatenation collision.
+func TestCompositeKey_RobustAgainstSeparatorInValues(t *testing.T) {
+	t.Parallel()
+
+	cols := []int{0, 1}
+	a := compositeKey([]any{"a:b", "c"}, cols)
+	b := compositeKey([]any{"a", "b:c"}, cols)
+	if a == b {
+		t.Errorf("compositeKey collides for ('a:b','c') vs ('a','b:c'); both got %q", a)
+	}
+}
+
 func TestCompositeKey_HandlesMixedTypes(t *testing.T) {
 	t.Parallel()
 

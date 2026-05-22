@@ -61,16 +61,13 @@ func newCompositeUniques(cols []colSpec, constraints [][]string) []*compositeUni
 }
 
 // compositeKey serializes the values at colIdx into a string usable as a
-// map key. The 0x1f (unit separator) byte is chosen because real seed values
-// effectively never contain it, so distinct tuples cannot collide via
-// concatenation.
+// map key. Each value is length-prefixed so distinct tuples cannot collide
+// even if a value happens to contain the separator character.
 func compositeKey(row []any, colIdx []int) string {
 	var b strings.Builder
-	for i, idx := range colIdx {
-		if i > 0 {
-			b.WriteByte(0x1f)
-		}
-		fmt.Fprintf(&b, "%v", row[idx])
+	for _, idx := range colIdx {
+		v := fmt.Sprintf("%v", row[idx])
+		fmt.Fprintf(&b, "%d:%s", len(v), v)
 	}
 
 	return b.String()
