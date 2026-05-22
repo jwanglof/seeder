@@ -24,8 +24,10 @@ type compositeUniqueSpec struct {
 
 // newCompositeUniques resolves each constraint's column names to indexes
 // inside cols. Constraints that reference a column seeder does not write
-// (identity, dropped by overrides, ...) are skipped — without writing the
-// column there is nothing to deduplicate against.
+// (identity, generated, dropped by overrides, ...) are skipped — without
+// writing the column there is nothing to deduplicate against. The DB still
+// enforces the constraint at insert time, so any duplicates surface as a
+// 1062 / 23505 instead.
 func newCompositeUniques(cols []colSpec, constraints [][]string) []*compositeUniqueSpec {
 	if len(constraints) == 0 {
 		return nil
