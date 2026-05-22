@@ -352,7 +352,7 @@ func uniqueEmailString(f *gofakeit.Faker, maxLen int) generator.Func {
 		}
 	}
 
-	return counterString(maxLen)
+	return counterString(f, maxLen)
 }
 
 // uniqueImageString keeps the picsum URL shape when MaxLength allows, shortens
@@ -377,7 +377,7 @@ func uniqueImageString(f *gofakeit.Faker, maxLen int) generator.Func {
 		}
 	}
 
-	return counterString(maxLen)
+	return counterString(f, maxLen)
 }
 
 // uniqueGenericString stitches "<base>-<uuid>" while reserving room for a
@@ -398,7 +398,7 @@ func uniqueGenericString(f *gofakeit.Faker, base generator.Func, maxLen int) gen
 		}
 	}
 	if maxLen < genericTightThreshold {
-		return counterString(maxLen)
+		return counterString(f, maxLen)
 	}
 
 	return func() any {
@@ -422,11 +422,14 @@ func uniqueGenericString(f *gofakeit.Faker, base generator.Func, maxLen int) gen
 }
 
 // counterString returns a generator that emits a zero-padded numeric counter
-// exactly maxLen characters wide. The counter wraps within the column width,
-// so very small widths (e.g., varchar(2)) eventually repeat.
-func counterString(maxLen int) generator.Func {
+// exactly maxLen characters wide. The counter starts at a faker-seeded random
+// offset (rather than 0) so re-running seeder in append mode against the same
+// table does not immediately collide with values inserted by a previous run.
+// The counter wraps within the column width, so very small widths (e.g.,
+// varchar(2)) eventually repeat.
+func counterString(f *gofakeit.Faker, maxLen int) generator.Func {
 	mod := counterMod(maxLen)
-	var counter uint64
+	counter := f.Uint64() % mod
 
 	return func() any {
 		counter++

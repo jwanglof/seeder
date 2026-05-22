@@ -1,7 +1,6 @@
 package infer_test
 
 import (
-	"fmt"
 	"regexp"
 	"slices"
 	"strings"
@@ -366,15 +365,57 @@ func TestPick_UniqueString_VeryTight_CounterShape(t *testing.T) {
 	}
 	gen := infer.Pick(f, col, infer.LocaleEN)
 
+	seen := make(map[string]bool, 100)
 	for i := 1; i <= 100; i++ {
 		v := gen()
 		s, ok := v.(string)
 		if !ok {
 			t.Fatalf("step %d: value = %T; want string", i, v)
 		}
-		if got, want := s, fmt.Sprintf("%05d", i); got != want {
-			t.Errorf("step %d: value = %q; want %q", i, got, want)
+		if len(s) != col.MaxLength {
+			t.Errorf("step %d: value %q length %d; want %d", i, s, len(s), col.MaxLength)
 		}
+		for _, r := range s {
+			if r < '0' || r > '9' {
+				t.Errorf("step %d: value %q contains non-digit %q", i, s, r)
+			}
+		}
+		if seen[s] {
+			t.Fatalf("step %d: value collided: %s", i, s)
+		}
+		seen[s] = true
+	}
+}
+
+// Two fakers seeded the same way must produce the same counter values, but
+// different seeds must produce different starting offsets so re-running
+// seeder in append mode does not immediately collide on row 1.
+func TestPick_UniqueString_CounterStartsAtFakerOffset(t *testing.T) {
+	t.Parallel()
+
+	col := introspect.Column{
+		Name:      "code",
+		Kind:      introspect.KindString,
+		IsUnique:  true,
+		MaxLength: 11,
+	}
+
+	gen := func(seed uint64) string {
+		f := gofakeit.New(seed)
+		g := infer.Pick(f, col, infer.LocaleEN)
+		s, ok := g().(string)
+		if !ok {
+			t.Fatalf("seed %d: not a string", seed)
+		}
+		return s
+	}
+
+	a, b, repeat := gen(1), gen(2), gen(1)
+	if a == b {
+		t.Errorf("counter start identical across different seeds (%q == %q); want offset to differ", a, b)
+	}
+	if a != repeat {
+		t.Errorf("counter start differs for identical seeds (%q != %q); want deterministic per seed", a, repeat)
 	}
 }
 
