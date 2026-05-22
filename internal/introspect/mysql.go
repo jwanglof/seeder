@@ -55,7 +55,7 @@ func (d *mySQLDriver) Introspect(ctx context.Context) (Schema, error) {
 	if err := d.fetchForeignKeys(ctx, tables); err != nil {
 		return Schema{}, fmt.Errorf("fetch foreign keys: %w", err)
 	}
-	uniques, err := d.fetchSingleColumnUniques(ctx)
+	uniques, err := d.fetchUniques(ctx)
 	if err != nil {
 		return Schema{}, fmt.Errorf("fetch uniques: %w", err)
 	}
@@ -67,13 +67,14 @@ func (d *mySQLDriver) Introspect(ctx context.Context) (Schema, error) {
 		pkIsSingle := len(t.PrimaryKey) == 1
 		for i := range t.Columns {
 			c := &t.Columns[i]
-			if uniques[t.Name][c.Name] {
+			if uniques.single[t.Name][c.Name] {
 				c.IsUnique = true
 			}
 			if pkIsSingle && c.Name == t.PrimaryKey[0] {
 				c.IsUnique = true
 			}
 		}
+		t.CompositeUniques = uniques.composite[t.Name]
 		out = append(out, *t)
 	}
 
@@ -252,10 +253,10 @@ WHERE tc.constraint_type = 'UNIQUE'
 ORDER BY kcu.table_name, tc.constraint_name, kcu.ordinal_position
 `
 
-func (d *mySQLDriver) fetchSingleColumnUniques(ctx context.Context) (map[string]map[string]bool, error) {
+func (d *mySQLDriver) fetchUniques(ctx context.Context) (uniquesInfo, error) {
 	rows, err := d.db.QueryContext(ctx, mySQLUniquesQuery)
 	if err != nil {
-		return nil, fmt.Errorf("query: %w", err)
+		return uniquesInfo{}, fmt.Errorf("query: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -265,24 +266,30 @@ func (d *mySQLDriver) fetchSingleColumnUniques(ctx context.Context) (map[string]
 	for rows.Next() {
 		var conName, tname, cname string
 		if err := rows.Scan(&conName, &tname, &cname); err != nil {
-			return nil, fmt.Errorf("scan: %w", err)
+			return uniquesInfo{}, fmt.Errorf("scan: %w", err)
 		}
 		k := constraintKey{table: tname, name: conName}
 		byConstraint[k] = append(byConstraint[k], cname)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("rows: %w", err)
+		return uniquesInfo{}, fmt.Errorf("rows: %w", err)
 	}
 
-	out := make(map[string]map[string]bool)
+	out := uniquesInfo{
+		single:    make(map[string]map[string]bool),
+		composite: make(map[string][][]string),
+	}
 	for k, cols := range byConstraint {
-		if len(cols) != 1 {
+		if len(cols) == 1 {
+			if out.single[k.table] == nil {
+				out.single[k.table] = make(map[string]bool)
+			}
+			out.single[k.table][cols[0]] = true
 			continue
 		}
-		if out[k.table] == nil {
-			out[k.table] = make(map[string]bool)
+		if len(cols) > 1 {
+			out.composite[k.table] = append(out.composite[k.table], cols)
 		}
-		out[k.table][cols[0]] = true
 	}
 
 	return out, nil

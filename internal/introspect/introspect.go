@@ -12,6 +12,15 @@ type Driver interface {
 	Introspect(ctx context.Context) (Schema, error)
 }
 
+// uniquesInfo carries the per-table outcome of scanning UNIQUE constraints:
+// single-column constraints flip Column.IsUnique, composite constraints feed
+// Table.CompositeUniques. Both driver implementations populate this shape
+// from one information_schema query.
+type uniquesInfo struct {
+	single    map[string]map[string]bool
+	composite map[string][][]string
+}
+
 func Do(ctx context.Context, dataSourceName string) (Schema, error) {
 	drv, err := openDriver(ctx, dataSourceName)
 	if err != nil {
