@@ -92,6 +92,15 @@ func (d *mySQLDriver) BulkInsert(ctx context.Context, table string, columns []st
 	if len(rows) == 0 {
 		return 0, nil
 	}
+	if len(columns) == 0 {
+		return 0, fmt.Errorf("bulk insert into %s: no columns", table)
+	}
+	if len(columns) > mysqlMaxPlaceholders {
+		return 0, fmt.Errorf(
+			"bulk insert into %s: %d columns exceeds MySQL placeholder cap %d",
+			table, len(columns), mysqlMaxPlaceholders,
+		)
+	}
 
 	cols := make([]string, len(columns))
 	for i, c := range columns {
