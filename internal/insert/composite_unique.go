@@ -30,20 +30,17 @@ func newCompositeUniques(cols []colSpec, constraints [][]string) []*compositeUni
 	if len(constraints) == 0 {
 		return nil
 	}
+	byName := make(map[string]int, len(cols))
+	for i, c := range cols {
+		byName[c.name] = i
+	}
 	out := make([]*compositeUniqueSpec, 0, len(constraints))
 	for _, cnames := range constraints {
 		idx := make([]int, 0, len(cnames))
 		ok := true
 		for _, cn := range cnames {
-			found := -1
-			for i, c := range cols {
-				if c.name == cn {
-					found = i
-
-					break
-				}
-			}
-			if found < 0 {
+			found, present := byName[cn]
+			if !present {
 				ok = false
 
 				break
