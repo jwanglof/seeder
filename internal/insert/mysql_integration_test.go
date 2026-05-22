@@ -349,6 +349,127 @@ func TestRun_MySQL_Truncate(t *testing.T) {
 	}
 }
 
+// Verifies BulkInsert splits a row set across multiple statements when the
+// placeholder budget would otherwise be exhausted (MySQL Error 1390).
+//
+//nolint:paralleltest,tparallel // mutates schema; cannot run in parallel
+func TestRun_MySQL_BulkInsert_ChunksLargeRowSets(t *testing.T) {
+	rawDSN := os.Getenv("SEEDER_TEST_DSN_MYSQL")
+	if rawDSN == "" {
+		t.Skip("SEEDER_TEST_DSN_MYSQL not set")
+	}
+
+	driverDSN, err := dsn.ToMySQLDSN(rawDSN)
+	if err != nil {
+		t.Fatalf("ToMySQLDSN: %v", err)
+	}
+	db, err := sql.Open("mysql", driverDSN)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	ctx := t.Context()
+	if err := applyMySQLInsertSchema(ctx, db, mysqlInsertSchemaSQL); err != nil {
+		t.Fatalf("apply schema: %v", err)
+	}
+
+	// Lower cap so even tiny row counts force several chunks; production cap
+	// would only kick in past 65535 / column-count rows per INSERT.
+	insert.SetMySQLMaxPlaceholders(t, 10)
+
+	schema, err := introspect.Do(ctx, rawDSN)
+	if err != nil {
+		t.Fatalf("introspect: %v", err)
+	}
+	order, err := plan.Build(schema.Tables)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	seed := uint64(42)
+	var buf bytes.Buffer
+	if _, err := insert.Run(ctx, rawDSN, schema, order, insert.Options{Rows: 25, Seed: &seed}, &buf); err != nil {
+		t.Fatalf("insert.Run: %v", err)
+	}
+
+	for _, table := range []string{"users", "orders", "comments"} {
+		var n int
+		if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM `"+table+"`").Scan(&n); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if n != 25 {
+			t.Errorf("%s count = %d; want 25 (chunked path)", table, n)
+		}
+	}
+}
+
+// 15 generated columns * 5000 rows = 75000 placeholders, comfortably above
+// MySQL's real 65535 cap — so this fails with Error 1390 unless BulkInsert
+// actually chunks. Unlike TestRun_MySQL_BulkInsert_ChunksLargeRowSets, this
+// test does not lower mysqlMaxPlaceholders, so removing the chunking code
+// path would surface here even if the lowered-cap test were also dropped.
+const mysqlWideSchemaSQL = `
+CREATE TABLE wide_rows (
+    id  INT AUTO_INCREMENT PRIMARY KEY,
+    c01 VARCHAR(50), c02 VARCHAR(50), c03 VARCHAR(50), c04 VARCHAR(50),
+    c05 VARCHAR(50), c06 VARCHAR(50), c07 VARCHAR(50), c08 VARCHAR(50),
+    c09 VARCHAR(50), c10 VARCHAR(50), c11 VARCHAR(50), c12 VARCHAR(50),
+    c13 VARCHAR(50), c14 VARCHAR(50), c15 VARCHAR(50)
+)
+`
+
+//nolint:paralleltest,tparallel // mutates schema; cannot run in parallel
+func TestRun_MySQL_BulkInsert_RealPlaceholderCapForcesChunking(t *testing.T) {
+	rawDSN := os.Getenv("SEEDER_TEST_DSN_MYSQL")
+	if rawDSN == "" {
+		t.Skip("SEEDER_TEST_DSN_MYSQL not set")
+	}
+
+	driverDSN, err := dsn.ToMySQLDSN(rawDSN)
+	if err != nil {
+		t.Fatalf("ToMySQLDSN: %v", err)
+	}
+	db, err := sql.Open("mysql", driverDSN)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	ctx := t.Context()
+	if err := applyMySQLInsertSchema(ctx, db, mysqlWideSchemaSQL); err != nil {
+		t.Fatalf("apply schema: %v", err)
+	}
+
+	schema, err := introspect.Do(ctx, rawDSN)
+	if err != nil {
+		t.Fatalf("introspect: %v", err)
+	}
+	order, err := plan.Build(schema.Tables)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	const rows = 5000
+	seed := uint64(42)
+	var buf bytes.Buffer
+	if _, err := insert.Run(ctx, rawDSN, schema, order, insert.Options{
+		Rows:      rows,
+		BatchSize: rows,
+		Seed:      &seed,
+	}, &buf); err != nil {
+		t.Fatalf("insert.Run: %v", err)
+	}
+
+	var n int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM `wide_rows`").Scan(&n); err != nil {
+		t.Fatalf("count wide_rows: %v", err)
+	}
+	if n != rows {
+		t.Errorf("wide_rows count = %d; want %d", n, rows)
+	}
+}
+
 func applyMySQLInsertSchema(ctx context.Context, db *sql.DB, schemaSQL string) error {
 	if err := tsql.ResetMySQLTables(ctx, db); err != nil {
 		return err

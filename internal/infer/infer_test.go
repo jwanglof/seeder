@@ -1,7 +1,6 @@
 package infer_test
 
 import (
-	"fmt"
 	"regexp"
 	"slices"
 	"strings"
@@ -366,15 +365,126 @@ func TestPick_UniqueString_VeryTight_CounterShape(t *testing.T) {
 	}
 	gen := infer.Pick(f, col, infer.LocaleEN)
 
+	const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	seen := make(map[string]bool, 100)
 	for i := 1; i <= 100; i++ {
 		v := gen()
 		s, ok := v.(string)
 		if !ok {
 			t.Fatalf("step %d: value = %T; want string", i, v)
 		}
-		if got, want := s, fmt.Sprintf("%05d", i); got != want {
-			t.Errorf("step %d: value = %q; want %q", i, got, want)
+		if len(s) != col.MaxLength {
+			t.Errorf("step %d: value %q length %d; want %d", i, s, len(s), col.MaxLength)
 		}
+		for _, r := range s {
+			if !strings.ContainsRune(alphabet, r) {
+				t.Errorf("step %d: value %q contains non-base62 rune %q", i, s, r)
+			}
+		}
+		if seen[s] {
+			t.Fatalf("step %d: value collided: %s", i, s)
+		}
+		seen[s] = true
+	}
+}
+
+// Two fakers seeded the same way must produce the same counter values, but
+// different seeds must produce different starting offsets so re-running
+// seeder in append mode does not immediately collide on row 1.
+func TestPick_UniqueString_CounterStartsAtFakerOffset(t *testing.T) {
+	t.Parallel()
+
+	col := introspect.Column{
+		Name:      "code",
+		Kind:      introspect.KindString,
+		IsUnique:  true,
+		MaxLength: 11,
+	}
+
+	gen := func(seed uint64) string {
+		f := gofakeit.New(seed)
+		g := infer.Pick(f, col, infer.LocaleEN)
+		s, ok := g().(string)
+		if !ok {
+			t.Fatalf("seed %d: not a string", seed)
+		}
+		return s
+	}
+
+	a, b, repeat := gen(1), gen(2), gen(1)
+	if a == b {
+		t.Errorf("counter start identical across different seeds (%q == %q); want offset to differ", a, b)
+	}
+	if a != repeat {
+		t.Errorf("counter start differs for identical seeds (%q != %q); want deterministic per seed", a, repeat)
+	}
+}
+
+// Non-UNIQUE string columns must also respect MaxLength: name rules such as
+// `description` (LoremIpsumParagraph) generate paragraphs that easily exceed
+// a varchar(255) column.
+func TestPick_String_RespectsMaxLength_NonUnique(t *testing.T) {
+	t.Parallel()
+
+	f := gofakeit.New(42)
+	col := introspect.Column{
+		Name:      "description",
+		Kind:      introspect.KindString,
+		MaxLength: 100,
+	}
+	gen := infer.Pick(f, col, infer.LocaleEN)
+
+	for i := range 200 {
+		v := gen()
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("step %d: value = %T; want string", i, v)
+		}
+		if !utf8.ValidString(s) {
+			t.Fatalf("step %d: value %q is not valid UTF-8", i, s)
+		}
+		if got := utf8.RuneCountInString(s); got > col.MaxLength {
+			t.Fatalf("step %d: value %q rune count %d exceeds MaxLength %d", i, s, got, col.MaxLength)
+		}
+	}
+}
+
+// Non-UNIQUE int columns with no name-rule match must respect the column's
+// declared width: tinyint / smallint were overflowing the default range.
+func TestPick_Int_RespectsDataType(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		dataType   string
+		maxAllowed int
+	}{
+		{"tinyint", 127},
+		{"smallint", 32767},
+		{"mediumint", 8388607},
+		{"int", 100000},
+		{"bigint", 100000},
+	}
+	for _, tc := range cases {
+		t.Run(tc.dataType, func(t *testing.T) {
+			t.Parallel()
+			f := gofakeit.New(42)
+			col := introspect.Column{
+				Name:     "method",
+				Kind:     introspect.KindInt,
+				DataType: tc.dataType,
+			}
+			gen := infer.Pick(f, col, infer.LocaleEN)
+			for i := range 200 {
+				v := gen()
+				n, ok := v.(int)
+				if !ok {
+					t.Fatalf("step %d: value = %T; want int", i, v)
+				}
+				if n < 0 || n > tc.maxAllowed {
+					t.Fatalf("step %d: value %d out of range (max %d for %s)", i, n, tc.maxAllowed, tc.dataType)
+				}
+			}
+		})
 	}
 }
 

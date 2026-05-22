@@ -221,6 +221,9 @@ var nameRules = []nameRule{
 
 func Pick(f *gofakeit.Faker, col introspect.Column, locale Locale) generator.Func {
 	base := pickBase(f, col, locale)
+	if col.Kind == introspect.KindString && col.MaxLength > 0 {
+		base = trimStringToMaxLength(base, col.MaxLength)
+	}
 	if !col.IsUnique {
 		return base
 	}
@@ -228,11 +231,43 @@ func Pick(f *gofakeit.Faker, col introspect.Column, locale Locale) generator.Fun
 	return uniqueWrap(f, col, base)
 }
 
+// trimStringToMaxLength wraps a string generator so its output never exceeds
+// maxLen characters. Trimming happens on rune boundaries so multi-byte UTF-8
+// values (e.g., ja-locale names) stay valid. Non-string outputs pass through
+// unchanged — only string generators can overflow a varchar(N) declaration.
+//
+// A single pass over the string is enough: range yields the byte index of
+// each rune start, so once we have walked maxLen runes we slice the original
+// string at the next rune's byte index. No []rune allocation and no extra
+// RuneCountInString traversal — meaningful when seed generators emit
+// paragraph-sized output millions of times.
+func trimStringToMaxLength(g generator.Func, maxLen int) generator.Func {
+	return func() any {
+		v := g()
+		s, ok := v.(string)
+		if !ok {
+			return v
+		}
+		count := 0
+		for i := range s {
+			if count == maxLen {
+				return s[:i]
+			}
+			count++
+		}
+
+		return s
+	}
+}
+
 func pickBase(f *gofakeit.Faker, col introspect.Column, locale Locale) generator.Func {
 	if r, ok := matchRule(col); ok {
 		gen := r.gen(locale)
 
 		return func() any { return gen(f) }
+	}
+	if col.Kind == introspect.KindInt {
+		return generator.IntForColumn(f, col.DataType)
 	}
 
 	return generator.FromKind(f, col.Kind, col.EnumValues)
@@ -308,7 +343,7 @@ const (
 
 // uniqueEmailString keeps the "<uuid>@example.com" shape when MaxLength allows,
 // shortens the UUID local-part when only one or more local-part characters
-// plus the full domain fit, and falls back to a numeric counter when MaxLength
+// plus the full domain fit, and falls back to a base62 counter when MaxLength
 // cannot hold even a single local-part character on top of the domain.
 func uniqueEmailString(f *gofakeit.Faker, maxLen int) generator.Func {
 	if maxLen <= 0 || maxLen >= len(emailSuffix)+36 {
@@ -326,11 +361,11 @@ func uniqueEmailString(f *gofakeit.Faker, maxLen int) generator.Func {
 		}
 	}
 
-	return counterString(maxLen)
+	return counterString(f, maxLen)
 }
 
 // uniqueImageString keeps the picsum URL shape when MaxLength allows, shortens
-// the seed UUID when the URL skeleton still fits, and falls back to a numeric
+// the seed UUID when the URL skeleton still fits, and falls back to a base62
 // counter for very tight widths.
 func uniqueImageString(f *gofakeit.Faker, maxLen int) generator.Func {
 	fixed := len(imagePrefix) + len(imageSuffix)
@@ -351,7 +386,7 @@ func uniqueImageString(f *gofakeit.Faker, maxLen int) generator.Func {
 		}
 	}
 
-	return counterString(maxLen)
+	return counterString(f, maxLen)
 }
 
 // uniqueGenericString stitches "<base>-<uuid>" while reserving room for a
@@ -359,7 +394,7 @@ func uniqueImageString(f *gofakeit.Faker, maxLen int) generator.Func {
 // portion always survives and keeps the value distinct. Trimming the base
 // happens in rune units to avoid splitting a multi-byte UTF-8 character.
 // When MaxLength is too tight to keep both base and a useful UUID suffix, the
-// generator falls back to a zero-padded counter instead.
+// generator falls back to a base62 counter instead.
 func uniqueGenericString(f *gofakeit.Faker, base generator.Func, maxLen int) generator.Func {
 	if maxLen <= 0 {
 		return func() any {
@@ -372,7 +407,7 @@ func uniqueGenericString(f *gofakeit.Faker, base generator.Func, maxLen int) gen
 		}
 	}
 	if maxLen < genericTightThreshold {
-		return counterString(maxLen)
+		return counterString(f, maxLen)
 	}
 
 	return func() any {
@@ -395,35 +430,54 @@ func uniqueGenericString(f *gofakeit.Faker, base generator.Func, maxLen int) gen
 	}
 }
 
-// counterString returns a generator that emits a zero-padded numeric counter
-// exactly maxLen characters wide. The counter wraps within the column width,
-// so very small widths (e.g., varchar(2)) eventually repeat.
-func counterString(maxLen int) generator.Func {
-	mod := counterMod(maxLen)
-	var counter uint64
+// counterAlphabet is the base62 character set used by counterString so a
+// width-N column has 62^N distinct values (~238k for varchar(3), 916M for
+// varchar(5)), letting the counter accommodate large row sets that would
+// otherwise wrap inside a numeric-only space (10^N).
+const counterAlphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+// counterString returns a generator that emits a base62-encoded counter
+// exactly maxLen characters wide. The counter starts at a faker-seeded random
+// offset so re-running seeder in append mode against the same table does not
+// immediately collide with values inserted by a previous run. The counter
+// wraps within the column's value space (62^maxLen), so widths smaller than
+// the row count eventually repeat.
+func counterString(f *gofakeit.Faker, maxLen int) generator.Func {
+	space := counterSpace(maxLen)
+	counter := f.Uint64() % space
 
 	return func() any {
 		counter++
 
-		return fmt.Sprintf("%0*d", maxLen, counter%mod)
+		return encodeBase62(counter%space, maxLen)
 	}
 }
 
-// counterMod returns 10^digits, capped at uint64 max for widths that exceed
-// what uint64 can represent.
-func counterMod(digits int) uint64 {
-	if digits <= 0 {
+// counterSpace returns 62^width, capped at uint64 max for widths that exceed
+// what uint64 can represent (62^11 already exceeds 2^64).
+func counterSpace(width int) uint64 {
+	if width <= 0 {
 		return 1
 	}
-	if digits >= 20 {
+	if width >= 11 {
 		return ^uint64(0)
 	}
 	var n uint64 = 1
-	for range digits {
-		n *= 10
+	for range width {
+		n *= 62
 	}
 
 	return n
+}
+
+func encodeBase62(v uint64, width int) string {
+	buf := make([]byte, width)
+	for i := width - 1; i >= 0; i-- {
+		buf[i] = counterAlphabet[v%62]
+		v /= 62
+	}
+
+	return string(buf)
 }
 
 // Explain reports which rule Pick will use for col; meant for --verbose output.

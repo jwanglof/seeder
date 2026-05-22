@@ -81,42 +81,66 @@ func (d *mySQLDriver) Truncate(ctx context.Context, tables []string) error {
 	return nil
 }
 
+// mysqlMaxPlaceholders is the per-statement bind-parameter cap enforced by
+// MySQL (Error 1390 "Prepared statement contains too many placeholders").
+// BulkInsert chunks rows so each INSERT stays under this limit. Declared as
+// a var (not a const) so tests can lower the cap to exercise the chunking
+// path without inserting tens of thousands of rows.
+var mysqlMaxPlaceholders = 65535
+
 func (d *mySQLDriver) BulkInsert(ctx context.Context, table string, columns []string, rows [][]any) (int64, error) {
 	if len(rows) == 0 {
 		return 0, nil
+	}
+	if len(columns) == 0 {
+		return 0, fmt.Errorf("bulk insert into %s: no columns", table)
+	}
+	if len(columns) > mysqlMaxPlaceholders {
+		return 0, fmt.Errorf(
+			"bulk insert into %s: %d columns exceeds MySQL placeholder cap %d",
+			table, len(columns), mysqlMaxPlaceholders,
+		)
 	}
 
 	cols := make([]string, len(columns))
 	for i, c := range columns {
 		cols[i] = quoteMySQLIdent(c)
 	}
-
+	quotedTable := quoteMySQLIdent(table)
 	rowPh := "(" + strings.TrimSuffix(strings.Repeat("?,", len(columns)), ",") + ")"
-	rowsPh := strings.TrimSuffix(strings.Repeat(rowPh+",", len(rows)), ",")
+	maxRowsPerChunk := max(mysqlMaxPlaceholders/len(columns), 1)
 
-	//nolint:gosec // G201: identifiers are sanitized via quoteMySQLIdent; values use placeholders
-	stmt := fmt.Sprintf(
-		"INSERT INTO %s (%s) VALUES %s",
-		quoteMySQLIdent(table),
-		strings.Join(cols, ","),
-		rowsPh,
-	)
+	var total int64
+	for start := 0; start < len(rows); start += maxRowsPerChunk {
+		end := min(start+maxRowsPerChunk, len(rows))
+		chunk := rows[start:end]
+		rowsPh := strings.TrimSuffix(strings.Repeat(rowPh+",", len(chunk)), ",")
 
-	args := make([]any, 0, len(rows)*len(columns))
-	for _, row := range rows {
-		args = append(args, row...)
+		//nolint:gosec // G201: identifiers are sanitized via quoteMySQLIdent; values use placeholders
+		stmt := fmt.Sprintf(
+			"INSERT INTO %s (%s) VALUES %s",
+			quotedTable,
+			strings.Join(cols, ","),
+			rowsPh,
+		)
+
+		args := make([]any, 0, len(chunk)*len(columns))
+		for _, row := range chunk {
+			args = append(args, row...)
+		}
+
+		res, err := d.db.ExecContext(ctx, stmt, args...)
+		if err != nil {
+			return total, fmt.Errorf("exec: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return total, fmt.Errorf("rows affected: %w", err)
+		}
+		total += n
 	}
 
-	res, err := d.db.ExecContext(ctx, stmt, args...)
-	if err != nil {
-		return 0, fmt.Errorf("exec: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("rows affected: %w", err)
-	}
-
-	return n, nil
+	return total, nil
 }
 
 func (d *mySQLDriver) ColumnValues(

@@ -1,6 +1,8 @@
 package generator
 
 import (
+	"strings"
+
 	"github.com/brianvoe/gofakeit/v7"
 
 	"github.com/mickamy/seeder/internal/introspect"
@@ -36,6 +38,30 @@ func FromKind(f *gofakeit.Faker, kind introspect.Kind, enumValues []string) Func
 		fallthrough
 	default:
 		return func() any { return f.Word() }
+	}
+}
+
+// IntForColumn returns a generator that stays inside the signed range of
+// dataType (tinyint / smallint / mediumint / int / bigint, on either Postgres
+// or MySQL). Unknown integer types fall back to the same range FromKind uses.
+// Unsigned types are not distinguished here because the signed bounds are
+// always safe under both signed and unsigned declarations.
+func IntForColumn(f *gofakeit.Faker, dataType string) Func {
+	minV, maxV := intRangeFor(dataType)
+
+	return func() any { return f.Number(minV, maxV) }
+}
+
+func intRangeFor(dataType string) (int, int) {
+	switch strings.ToLower(strings.TrimSpace(dataType)) {
+	case "tinyint":
+		return 0, 100 // signed tinyint max 127, unsigned 255
+	case "smallint":
+		return 0, 10000 // signed smallint max 32767
+	case "mediumint":
+		return 0, 100000 // signed mediumint max 8388607
+	default:
+		return 1, 100000
 	}
 }
 
