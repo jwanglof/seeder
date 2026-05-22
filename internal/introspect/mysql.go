@@ -134,6 +134,11 @@ func (d *mySQLDriver) fetchTablesWithColumns(ctx context.Context) (map[string]*T
 			maxLength = int(maxLen.Int64)
 		}
 		extraLower := strings.ToLower(extra)
+		// VIRTUAL / STORED GENERATED match true generated columns; DEFAULT_GENERATED
+		// in the same field marks expression defaults (e.g., CURRENT_TIMESTAMP)
+		// on otherwise-writable columns, so it must not be treated as generated.
+		isGenerated := strings.Contains(extraLower, "virtual generated") ||
+			strings.Contains(extraLower, "stored generated")
 		t.Columns = append(t.Columns, Column{
 			Name:        cname,
 			DataType:    dataType,
@@ -142,7 +147,7 @@ func (d *mySQLDriver) fetchTablesWithColumns(ctx context.Context) (map[string]*T
 			Nullable:    isNullable == "YES",
 			Default:     defaultVal,
 			IsIdentity:  strings.Contains(extraLower, "auto_increment"),
-			IsGenerated: strings.Contains(extraLower, "generated"),
+			IsGenerated: isGenerated,
 			MaxLength:   maxLength,
 		})
 	}
