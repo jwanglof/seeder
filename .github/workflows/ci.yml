@@ -40,23 +40,15 @@ jobs:
       - name: Run tests
         run: make test
 
-  test-integration:
+  test-integration-postgres:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ["15", "16", "17", "18"]
     services:
-      mysql:
-        image: mysql:8.4
-        env:
-          MYSQL_ROOT_PASSWORD: pass
-          MYSQL_DATABASE: dev
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -ppass"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
       postgres:
-        image: postgres:15
+        image: postgres:${{ matrix.postgres }}
         env:
           POSTGRES_PASSWORD: pass
           POSTGRES_DB: dev
@@ -68,7 +60,6 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      SEEDER_TEST_DSN_MYSQL: mysql://root:pass@localhost:3306/dev?parseTime=true
       SEEDER_TEST_DSN_POSTGRES: postgres://postgres:pass@localhost:5432/dev?sslmode=disable
     steps:
       - uses: actions/checkout@v6
@@ -77,7 +68,38 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Run integration tests
+      - name: Run integration tests (Postgres ${{ matrix.postgres }})
+        run: make test-integration
+
+  test-integration-mysql:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mysql: ["8.4", "9"]
+    services:
+      mysql:
+        image: mysql:${{ matrix.mysql }}
+        env:
+          MYSQL_ROOT_PASSWORD: pass
+          MYSQL_DATABASE: dev
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -ppass"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      SEEDER_TEST_DSN_MYSQL: mysql://root:pass@localhost:3306/dev?parseTime=true
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run integration tests (MySQL ${{ matrix.mysql }})
         run: make test-integration
 
   build:
