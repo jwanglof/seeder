@@ -133,15 +133,17 @@ func (d *mySQLDriver) fetchTablesWithColumns(ctx context.Context) (map[string]*T
 		if maxLen.Valid {
 			maxLength = int(maxLen.Int64)
 		}
+		extraLower := strings.ToLower(extra)
 		t.Columns = append(t.Columns, Column{
-			Name:       cname,
-			DataType:   dataType,
-			EnumValues: enumValues,
-			Kind:       kind,
-			Nullable:   isNullable == "YES",
-			Default:    defaultVal,
-			IsIdentity: strings.Contains(strings.ToLower(extra), "auto_increment"),
-			MaxLength:  maxLength,
+			Name:        cname,
+			DataType:    dataType,
+			EnumValues:  enumValues,
+			Kind:        kind,
+			Nullable:    isNullable == "YES",
+			Default:     defaultVal,
+			IsIdentity:  strings.Contains(extraLower, "auto_increment"),
+			IsGenerated: strings.Contains(extraLower, "generated"),
+			MaxLength:   maxLength,
 		})
 	}
 	if err := rows.Err(); err != nil {
