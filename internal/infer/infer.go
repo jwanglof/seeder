@@ -235,6 +235,12 @@ func Pick(f *gofakeit.Faker, col introspect.Column, locale Locale) generator.Fun
 // maxLen characters. Trimming happens on rune boundaries so multi-byte UTF-8
 // values (e.g., ja-locale names) stay valid. Non-string outputs pass through
 // unchanged — only string generators can overflow a varchar(N) declaration.
+//
+// A single pass over the string is enough: range yields the byte index of
+// each rune start, so once we have walked maxLen runes we slice the original
+// string at the next rune's byte index. No []rune allocation and no extra
+// RuneCountInString traversal — meaningful when seed generators emit
+// paragraph-sized output millions of times.
 func trimStringToMaxLength(g generator.Func, maxLen int) generator.Func {
 	return func() any {
 		v := g()
@@ -242,12 +248,15 @@ func trimStringToMaxLength(g generator.Func, maxLen int) generator.Func {
 		if !ok {
 			return v
 		}
-		if utf8.RuneCountInString(s) <= maxLen {
-			return s
+		count := 0
+		for i := range s {
+			if count == maxLen {
+				return s[:i]
+			}
+			count++
 		}
-		runes := []rune(s)
 
-		return string(runes[:maxLen])
+		return s
 	}
 }
 
