@@ -110,6 +110,9 @@ func pgKind(dataType, udtName string, enums map[string][]string) Kind {
 	}
 }
 
+// pgTablesQuery requires Postgres 12+: is_generated was introduced with the
+// GENERATED ALWAYS AS ... STORED feature. Older servers will fail here with
+// "column is_generated does not exist"; seeder does not fall back.
 const pgTablesQuery = `
 SELECT
     c.table_name,
