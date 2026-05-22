@@ -42,7 +42,7 @@ func (d *postgresDriver) Introspect(ctx context.Context) (Schema, error) {
 	if err := d.fetchForeignKeys(ctx, tables); err != nil {
 		return Schema{}, fmt.Errorf("fetch foreign keys: %w", err)
 	}
-	uniques, err := d.fetchSingleColumnUniques(ctx)
+	uniques, err := d.fetchUniques(ctx)
 	if err != nil {
 		return Schema{}, fmt.Errorf("fetch uniques: %w", err)
 	}
@@ -63,13 +63,14 @@ func (d *postgresDriver) Introspect(ctx context.Context) (Schema, error) {
 			if c.Kind == KindEnum {
 				c.EnumValues = enumLabels[c.UDTName]
 			}
-			if uniques[t.Name][c.Name] {
+			if uniques.single[t.Name][c.Name] {
 				c.IsUnique = true
 			}
 			if pkIsSingle && c.Name == t.PrimaryKey[0] {
 				c.IsUnique = true
 			}
 		}
+		t.CompositeUniques = uniques.composite[t.Name]
 		out = append(out, *t)
 	}
 
@@ -271,7 +272,8 @@ func (d *postgresDriver) fetchForeignKeys(ctx context.Context, tables map[string
 	return nil
 }
 
-// Returns every UNIQUE column; fetchSingleColumnUniques drops composite ones.
+// Returns every UNIQUE column; fetchUniques routes single-column constraints
+// to Column.IsUnique and keeps composite ones as Table.CompositeUniques.
 const pgUniquesQuery = `
 SELECT
     tc.constraint_name,
@@ -288,10 +290,10 @@ ORDER BY kcu.table_name, tc.constraint_name, kcu.ordinal_position
 
 // Postgres constraint names are unique within a schema, so the constraint_name
 // alone is enough to group rows belonging to the same UNIQUE constraint.
-func (d *postgresDriver) fetchSingleColumnUniques(ctx context.Context) (map[string]map[string]bool, error) {
+func (d *postgresDriver) fetchUniques(ctx context.Context) (uniquesInfo, error) {
 	rows, err := d.conn.Query(ctx, pgUniquesQuery)
 	if err != nil {
-		return nil, fmt.Errorf("query: %w", err)
+		return uniquesInfo{}, fmt.Errorf("query: %w", err)
 	}
 	defer rows.Close()
 
@@ -300,24 +302,35 @@ func (d *postgresDriver) fetchSingleColumnUniques(ctx context.Context) (map[stri
 	for rows.Next() {
 		var conName, tname, cname string
 		if err := rows.Scan(&conName, &tname, &cname); err != nil {
-			return nil, fmt.Errorf("scan: %w", err)
+			return uniquesInfo{}, fmt.Errorf("scan: %w", err)
 		}
 		byConstraint[conName] = append(byConstraint[conName], tableCol{tname, cname})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("rows: %w", err)
+		return uniquesInfo{}, fmt.Errorf("rows: %w", err)
 	}
 
-	out := make(map[string]map[string]bool)
+	out := uniquesInfo{
+		single:    make(map[string]map[string]bool),
+		composite: make(map[string][][]string),
+	}
 	for _, cols := range byConstraint {
-		if len(cols) != 1 {
+		if len(cols) == 0 {
 			continue
 		}
-		c := cols[0]
-		if out[c.table] == nil {
-			out[c.table] = make(map[string]bool)
+		table := cols[0].table
+		if len(cols) == 1 {
+			if out.single[table] == nil {
+				out.single[table] = make(map[string]bool)
+			}
+			out.single[table][cols[0].column] = true
+			continue
 		}
-		out[c.table][c.column] = true
+		colNames := make([]string, len(cols))
+		for i, c := range cols {
+			colNames[i] = c.column
+		}
+		out.composite[table] = append(out.composite[table], colNames)
 	}
 
 	return out, nil

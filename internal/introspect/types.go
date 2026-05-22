@@ -9,6 +9,11 @@ type Table struct {
 	Columns     []Column
 	PrimaryKey  []string
 	ForeignKeys []ForeignKey
+	// CompositeUniques lists multi-column UNIQUE constraints (single-column
+	// UNIQUE constraints are surfaced via Column.IsUnique). Each entry is the
+	// ordered list of columns participating in one constraint. Insert
+	// generators use these to deduplicate row tuples before insert.
+	CompositeUniques [][]string
 }
 
 type Column struct {

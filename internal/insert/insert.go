@@ -440,13 +440,14 @@ func insertTable(
 	}
 
 	inBatch := newBatchBuffer(selfFKRefs, defaultPoolCapacity)
+	composites := newCompositeUniques(cols, t.CompositeUniques)
 
 	var totalInserted int64
 	var totalTook time.Duration
 	remaining := rows
 	for remaining > 0 {
 		b := min(remaining, batchSize)
-		data, err := generateBatch(b, cols, faker, pool, inBatch, t.Name)
+		data, err := generateBatch(b, cols, faker, pool, inBatch, composites, t.Name)
 		if err != nil {
 			return Stats{Table: t.Name, Rows: totalInserted, Took: totalTook}, err
 		}
@@ -529,76 +530,58 @@ func generateBatch(
 	faker *gofakeit.Faker,
 	pool Pool,
 	inBatch *batchBuffer,
+	composites []*compositeUniqueSpec,
 	tableName string,
 ) ([][]any, error) {
 	data := make([][]any, 0, n)
+	keys := make([]string, 0, len(composites))
+	skipFlags := make([]bool, 0, len(composites))
 	for range n {
-		row := make([]any, len(cols))
-
-		for j, c := range cols {
-			if c.gen != nil {
-				row[j] = c.gen()
+		var row []any
+		for attempts := 0; ; attempts++ {
+			var err error
+			row, err = generateOneRow(cols, faker, pool, inBatch, tableName)
+			if err != nil {
+				return nil, err
 			}
-		}
 
-		pickedFK := make(map[*fkSpec]map[string]any)
-		absentFK := make(map[*fkSpec]bool)
-		for j, c := range cols {
-			if c.gen != nil || c.fk == nil {
-				continue
-			}
-			if _, done := pickedFK[c.fk]; !done && !absentFK[c.fk] {
-				var pickedRow map[string]any
-				var err error
-				if c.fk.referencedTable == tableName {
-					pickedRow, err = pickSelfFKRow(faker, pool, inBatch, row, cols, c.fk, tableName)
-				} else {
-					pickedRow, err = pickFKRow(faker, pool, c.fk, tableName)
+			keys = keys[:0]
+			skipFlags = skipFlags[:0]
+			collision := false
+			var collisionCU *compositeUniqueSpec
+			for _, cu := range composites {
+				key, skip := compositeKeyForRow(row, cu.colIdx)
+				keys = append(keys, key)
+				skipFlags = append(skipFlags, skip)
+				if skip {
+					continue
 				}
-				if err != nil {
-					return nil, err
-				}
-				if pickedRow == nil {
-					absentFK[c.fk] = true
-				} else {
-					pickedFK[c.fk] = pickedRow
+				if cu.seen[key] {
+					collision = true
+					collisionCU = cu
+
+					break
 				}
 			}
-			if absentFK[c.fk] {
-				row[j] = nil
-
-				continue
-			}
-			row[j] = pickedFK[c.fk][c.fk.referencedColumns[c.fkIdx]]
-		}
-
-		pickedPoly := make(map[*polySpec]polyResolved)
-		absentPoly := make(map[*polySpec]bool)
-		for j, c := range cols {
-			if c.poly == nil {
-				continue
-			}
-			if _, done := pickedPoly[c.poly]; !done && !absentPoly[c.poly] {
-				resolved, err := pickPolymorphic(faker, pool, c.poly, tableName)
-				if err != nil {
-					return nil, err
+			if !collision {
+				for i, cu := range composites {
+					if skipFlags[i] {
+						continue
+					}
+					cu.seen[keys[i]] = true
 				}
-				if resolved == (polyResolved{}) {
-					absentPoly[c.poly] = true
-				} else {
-					pickedPoly[c.poly] = resolved
-				}
-			}
-			if absentPoly[c.poly] {
-				row[j] = nil
 
-				continue
+				break
 			}
-			p := pickedPoly[c.poly]
-			if c.polyKind == polyColType {
-				row[j] = p.typ
-			} else {
-				row[j] = p.id
+			if attempts+1 >= maxCompositeUniqueAttempts {
+				return nil, fmt.Errorf(
+					"composite UNIQUE (%s) collision in %s after %d attempts at tuple (%s); reduce --rows or --exclude %s",
+					strings.Join(collisionCU.constraint, ", "),
+					tableName,
+					maxCompositeUniqueAttempts,
+					formatCollisionTuple(row, collisionCU.colIdx),
+					tableName,
+				)
 			}
 		}
 
@@ -616,6 +599,85 @@ func generateBatch(
 	}
 
 	return data, nil
+}
+
+func generateOneRow(
+	cols []colSpec,
+	faker *gofakeit.Faker,
+	pool Pool,
+	inBatch *batchBuffer,
+	tableName string,
+) ([]any, error) {
+	row := make([]any, len(cols))
+
+	for j, c := range cols {
+		if c.gen != nil {
+			row[j] = c.gen()
+		}
+	}
+
+	pickedFK := make(map[*fkSpec]map[string]any)
+	absentFK := make(map[*fkSpec]bool)
+	for j, c := range cols {
+		if c.gen != nil || c.fk == nil {
+			continue
+		}
+		if _, done := pickedFK[c.fk]; !done && !absentFK[c.fk] {
+			var pickedRow map[string]any
+			var err error
+			if c.fk.referencedTable == tableName {
+				pickedRow, err = pickSelfFKRow(faker, pool, inBatch, row, cols, c.fk, tableName)
+			} else {
+				pickedRow, err = pickFKRow(faker, pool, c.fk, tableName)
+			}
+			if err != nil {
+				return nil, err
+			}
+			if pickedRow == nil {
+				absentFK[c.fk] = true
+			} else {
+				pickedFK[c.fk] = pickedRow
+			}
+		}
+		if absentFK[c.fk] {
+			row[j] = nil
+
+			continue
+		}
+		row[j] = pickedFK[c.fk][c.fk.referencedColumns[c.fkIdx]]
+	}
+
+	pickedPoly := make(map[*polySpec]polyResolved)
+	absentPoly := make(map[*polySpec]bool)
+	for j, c := range cols {
+		if c.poly == nil {
+			continue
+		}
+		if _, done := pickedPoly[c.poly]; !done && !absentPoly[c.poly] {
+			resolved, err := pickPolymorphic(faker, pool, c.poly, tableName)
+			if err != nil {
+				return nil, err
+			}
+			if resolved == (polyResolved{}) {
+				absentPoly[c.poly] = true
+			} else {
+				pickedPoly[c.poly] = resolved
+			}
+		}
+		if absentPoly[c.poly] {
+			row[j] = nil
+
+			continue
+		}
+		p := pickedPoly[c.poly]
+		if c.polyKind == polyColType {
+			row[j] = p.typ
+		} else {
+			row[j] = p.id
+		}
+	}
+
+	return row, nil
 }
 
 func pickFKRow(faker *gofakeit.Faker, pool Pool, fk *fkSpec, tableName string) (map[string]any, error) {

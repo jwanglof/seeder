@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 )
 
-const cacheVersion = 3
+const cacheVersion = 4
 
 type cachedSchema struct {
 	Version int
