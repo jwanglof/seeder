@@ -334,7 +334,7 @@ const (
 
 // uniqueEmailString keeps the "<uuid>@example.com" shape when MaxLength allows,
 // shortens the UUID local-part when only one or more local-part characters
-// plus the full domain fit, and falls back to a numeric counter when MaxLength
+// plus the full domain fit, and falls back to a base62 counter when MaxLength
 // cannot hold even a single local-part character on top of the domain.
 func uniqueEmailString(f *gofakeit.Faker, maxLen int) generator.Func {
 	if maxLen <= 0 || maxLen >= len(emailSuffix)+36 {
@@ -356,7 +356,7 @@ func uniqueEmailString(f *gofakeit.Faker, maxLen int) generator.Func {
 }
 
 // uniqueImageString keeps the picsum URL shape when MaxLength allows, shortens
-// the seed UUID when the URL skeleton still fits, and falls back to a numeric
+// the seed UUID when the URL skeleton still fits, and falls back to a base62
 // counter for very tight widths.
 func uniqueImageString(f *gofakeit.Faker, maxLen int) generator.Func {
 	fixed := len(imagePrefix) + len(imageSuffix)
@@ -385,7 +385,7 @@ func uniqueImageString(f *gofakeit.Faker, maxLen int) generator.Func {
 // portion always survives and keeps the value distinct. Trimming the base
 // happens in rune units to avoid splitting a multi-byte UTF-8 character.
 // When MaxLength is too tight to keep both base and a useful UUID suffix, the
-// generator falls back to a zero-padded counter instead.
+// generator falls back to a base62 counter instead.
 func uniqueGenericString(f *gofakeit.Faker, base generator.Func, maxLen int) generator.Func {
 	if maxLen <= 0 {
 		return func() any {
