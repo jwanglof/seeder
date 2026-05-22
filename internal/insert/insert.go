@@ -212,7 +212,9 @@ func fkPoolColumns(schema introspect.Schema, polys map[string][]PolymorphicSpec)
 // defaults are seeder-generated. In normal DB mode the DB owns those values
 // so we skip them; in output mode (--output sql / ndjson) there is no DB to
 // assign them, so we generate values ourselves to keep downstream FK / poly
-// pools populated.
+// pools populated. Generated columns (DB-computed from other columns) are
+// always skipped regardless of keepDBManaged — the output target is expected
+// to carry the same generation expression and recompute them too.
 func planColumns(
 	t introspect.Table,
 	polys []PolymorphicSpec,
