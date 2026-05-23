@@ -433,17 +433,18 @@ func uniqueGenericString(f *gofakeit.Faker, base generator.Func, maxLen int) gen
 // counterAlphabet is a 36-character case-fold-safe set: digits + uppercase
 // letters only. MySQL's default collation (utf8mb4_0900_ai_ci) treats
 // uppercase and lowercase as equal, so a mixed-case alphabet collides under
-// UNIQUE constraints. Sticking to a single case gives a width-N column
-// 36^N distinct values (46656 for varchar(3), ~60M for varchar(5)) that
-// stay distinct under both case-sensitive and case-insensitive collations.
+// UNIQUE constraints. Sticking to a single case gives a width-N column up
+// to 36^N distinct values (46656 for varchar(3), ~60M for varchar(5));
+// counterSpace additionally caps the modulus at uint64 max, so widths >= 13
+// stop at 2^64-1 even though 36^N is larger.
 const counterAlphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 // counterString returns a generator that emits a base36-encoded counter
 // exactly maxLen characters wide. The counter starts at a faker-seeded random
 // offset so re-running seeder in append mode against the same table does not
 // immediately collide with values inserted by a previous run. The counter
-// wraps within the column's value space (36^maxLen), so widths smaller than
-// the row count eventually repeat.
+// wraps within min(36^maxLen, 2^64-1), so widths smaller than the row count
+// eventually repeat.
 func counterString(f *gofakeit.Faker, maxLen int) generator.Func {
 	space := counterSpace(maxLen)
 	counter := f.Uint64() % space
