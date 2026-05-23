@@ -117,6 +117,9 @@ func TestIntrospect_MySQL(t *testing.T) {
 	if createdAtCol.Kind != introspect.KindTimestamp {
 		t.Errorf("users.created_at Kind = %v; want KindTimestamp", createdAtCol.Kind)
 	}
+	if createdAtCol.IsGenerated {
+		t.Errorf("users.created_at IsGenerated = true; want false (DEFAULT CURRENT_TIMESTAMP is not a generated column)")
+	}
 
 	orders := findTable(t, schema, "orders")
 	statusCol := findColumn(t, orders, "status")

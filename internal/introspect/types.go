@@ -34,6 +34,11 @@ type Column struct {
 	// `DEFAULT ''`).
 	Default    *string
 	IsIdentity bool
+	// IsGenerated is true for columns the database computes itself
+	// (Postgres GENERATED ALWAYS AS, MySQL VIRTUAL / STORED GENERATED).
+	// Seeder must not emit a value for these — the DB rejects writes that
+	// target them (Postgres 428C9, MySQL Error 3105).
+	IsGenerated bool
 	// IsUnique is set only for single-column UNIQUE constraints.
 	IsUnique bool
 	// MaxLength is character_maximum_length for length-limited character

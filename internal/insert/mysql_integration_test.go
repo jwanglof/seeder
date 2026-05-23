@@ -470,6 +470,63 @@ func TestRun_MySQL_BulkInsert_RealPlaceholderCapForcesChunking(t *testing.T) {
 	}
 }
 
+const mysqlGeneratedSchemaSQL = `
+CREATE TABLE products (
+    id     INT AUTO_INCREMENT PRIMARY KEY,
+    name   VARCHAR(255) NOT NULL,
+    cost   INT NOT NULL,
+    margin INT NOT NULL,
+    price  INT AS (cost + margin) STORED
+)
+`
+
+//nolint:paralleltest,tparallel // mutates schema; cannot run in parallel
+func TestRun_MySQL_GeneratedColumnsAreSkipped(t *testing.T) {
+	rawDSN := os.Getenv("SEEDER_TEST_DSN_MYSQL")
+	if rawDSN == "" {
+		t.Skip("SEEDER_TEST_DSN_MYSQL not set")
+	}
+
+	driverDSN, err := dsn.ToMySQLDSN(rawDSN)
+	if err != nil {
+		t.Fatalf("ToMySQLDSN: %v", err)
+	}
+	db, err := sql.Open("mysql", driverDSN)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	ctx := t.Context()
+	if err := applyMySQLInsertSchema(ctx, db, mysqlGeneratedSchemaSQL); err != nil {
+		t.Fatalf("apply schema: %v", err)
+	}
+	schema, err := introspect.Do(ctx, rawDSN)
+	if err != nil {
+		t.Fatalf("introspect: %v", err)
+	}
+	order, err := plan.Build(schema.Tables)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	seed := uint64(42)
+	var buf bytes.Buffer
+	if _, err := insert.Run(ctx, rawDSN, schema, order, insert.Options{Rows: 25, Seed: &seed}, &buf); err != nil {
+		t.Fatalf("insert.Run: %v", err)
+	}
+
+	var mismatches int
+	if err := db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM products WHERE price <> cost + margin",
+	).Scan(&mismatches); err != nil {
+		t.Fatalf("formula check: %v", err)
+	}
+	if mismatches != 0 {
+		t.Errorf("products with price <> cost + margin = %d; want 0 (DB recomputes generated column)", mismatches)
+	}
+}
+
 func applyMySQLInsertSchema(ctx context.Context, db *sql.DB, schemaSQL string) error {
 	if err := tsql.ResetMySQLTables(ctx, db); err != nil {
 		return err

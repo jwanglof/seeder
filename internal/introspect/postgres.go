@@ -110,6 +110,9 @@ func pgKind(dataType, udtName string, enums map[string][]string) Kind {
 	}
 }
 
+// pgTablesQuery requires Postgres 12+: is_generated was introduced with the
+// GENERATED ALWAYS AS ... STORED feature. Older servers will fail here with
+// "column is_generated does not exist"; seeder does not fall back.
 const pgTablesQuery = `
 SELECT
     c.table_name,
@@ -119,7 +122,8 @@ SELECT
     c.is_nullable,
     c.column_default,
     c.is_identity,
-    c.character_maximum_length
+    c.character_maximum_length,
+    c.is_generated
 FROM information_schema.tables t
 JOIN information_schema.columns c
   ON c.table_schema = t.table_schema
@@ -143,8 +147,12 @@ func (d *postgresDriver) fetchTablesWithColumns(ctx context.Context) (map[string
 			isNullable, isIdentity          string
 			colDefault                      sql.NullString
 			maxLen                          sql.NullInt64
+			isGenerated                     string
 		)
-		if err := rows.Scan(&tname, &cname, &dataType, &udtName, &isNullable, &colDefault, &isIdentity, &maxLen); err != nil {
+		if err := rows.Scan(
+			&tname, &cname, &dataType, &udtName,
+			&isNullable, &colDefault, &isIdentity, &maxLen, &isGenerated,
+		); err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
 		}
 		t, ok := tables[tname]
@@ -162,13 +170,14 @@ func (d *postgresDriver) fetchTablesWithColumns(ctx context.Context) (map[string
 			maxLength = int(maxLen.Int64)
 		}
 		t.Columns = append(t.Columns, Column{
-			Name:       cname,
-			DataType:   dataType,
-			UDTName:    udtName,
-			Nullable:   isNullable == "YES",
-			Default:    defaultVal,
-			IsIdentity: isIdentity == "YES",
-			MaxLength:  maxLength,
+			Name:        cname,
+			DataType:    dataType,
+			UDTName:     udtName,
+			Nullable:    isNullable == "YES",
+			Default:     defaultVal,
+			IsIdentity:  isIdentity == "YES",
+			IsGenerated: isGenerated == "ALWAYS",
+			MaxLength:   maxLength,
 		})
 	}
 	if err := rows.Err(); err != nil {
