@@ -75,8 +75,24 @@ func randomBytes(f *gofakeit.Faker) []byte {
 	return b
 }
 
+// jsonOptions pins the default `json` / `jsonb` shape to a small fixed-key
+// object so seeded rows stay under ~120 bytes. The unconfigured
+// `gofakeit.JSON(nil)` path can emit multi-KB nested arrays, which becomes
+// prohibitively expensive at large row counts. Callers who need a different
+// payload should pin the column via `tables.<name>.columns.<col>.value` in
+// seeder.yaml.
+var jsonOptions = &gofakeit.JSONOptions{
+	Type: "object",
+	Fields: []gofakeit.Field{
+		{Name: "id", Function: "uuid"},
+		{Name: "label", Function: "word"},
+		{Name: "count", Function: "number", Params: gofakeit.MapParams{"min": {"1"}, "max": {"100"}}},
+		{Name: "active", Function: "bool"},
+	},
+}
+
 func jsonValue(f *gofakeit.Faker) string {
-	b, err := f.JSON(nil)
+	b, err := f.JSON(jsonOptions)
 	if err != nil {
 		return "{}"
 	}
