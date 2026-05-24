@@ -281,7 +281,7 @@ func TestBuildInsertOptions_RowsPriority(t *testing.T) {
 	five := 5
 	twenty := 20
 	cfg := config.Config{
-		Rows:    &five,
+		Rows: &five,
 		Tables: map[string]config.TableConfig{
 			"users": {Rows: &twenty},
 		},
