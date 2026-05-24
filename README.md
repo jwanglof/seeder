@@ -340,12 +340,12 @@ top of the matched name rule, and integer columns are widened to a much
 larger range. Composite `UNIQUE` constraints are not flagged because no
 single per-column generator can guarantee combined uniqueness.
 
-> **Note on `json` / `jsonb` columns**: by default these emit
-> randomly-structured placeholder JSON via `gofakeit.JSON(nil)`. Each value
-> can be a multi-KB nested array/object, so seeding thousands of rows of
-> `jsonb` is heavy on memory and bulk-insert throughput. Pin them with
-> `tables.<name>.columns.<col>.value: '{"k":"v"}'` in `seeder.yaml`, or
-> `--exclude` the table.
+> **Note on `json` / `jsonb` columns**: by default these emit a small
+> fixed-shape object — `{"id": <uuid>, "label": <word>, "count": <int>,
+> "active": <bool>}` — sized at ~85 bytes per row. This keeps `jsonb` seeding
+> cheap at millions of rows while still producing realistic-looking payloads.
+> Pin a different shape via `tables.<name>.columns.<col>.value: '{...}'` in
+> `seeder.yaml` when you need column-specific fields.
 
 > **Note on large `--rows`**: `seeder` generates rows in chunks of
 > `--batch-size` (default 1000) and flushes each chunk via `COPY` / multi-row

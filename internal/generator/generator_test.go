@@ -93,6 +93,36 @@ func TestFromKind_JSONIsValid(t *testing.T) {
 	}
 }
 
+func TestFromKind_JSONShape(t *testing.T) {
+	t.Parallel()
+
+	f := gofakeit.New(42)
+	gen := generator.FromKind(f, introspect.KindJSON, nil)
+
+	wantKeys := []string{"id", "label", "count", "active"}
+	const maxBytes = 200 // headroom over the ~85 B observed default shape
+
+	for range 50 {
+		v := gen()
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("JSON value type = %T; want string", v)
+		}
+		if len(s) > maxBytes {
+			t.Errorf("JSON length = %d; want <= %d (%q)", len(s), maxBytes, s)
+		}
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(s), &obj); err != nil {
+			t.Fatalf("JSON is not an object: %v (%q)", err, s)
+		}
+		for _, k := range wantKeys {
+			if _, ok := obj[k]; !ok {
+				t.Errorf("missing key %q in %q", k, s)
+			}
+		}
+	}
+}
+
 func TestFromKind_DeterministicWithSeed(t *testing.T) {
 	t.Parallel()
 
