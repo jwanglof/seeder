@@ -103,7 +103,11 @@ func TestFromKind_JSONShape(t *testing.T) {
 	const maxBytes = 200 // headroom over the ~85 B observed default shape
 
 	for range 50 {
-		s := gen().(string)
+		v := gen()
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("JSON value type = %T; want string", v)
+		}
 		if len(s) > maxBytes {
 			t.Errorf("JSON length = %d; want <= %d (%q)", len(s), maxBytes, s)
 		}
