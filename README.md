@@ -198,7 +198,6 @@ every time, drop a `seeder.yaml` next to where you run the command — it is aut
 `--config path/to/seeder.yaml` to point at one explicitly.
 
 ```yaml
-version: 1
 rows: 1000
 seed: 42
 locale: en
@@ -217,16 +216,30 @@ tables:
     exclude: true
 ```
 
-Precedence is **CLI flag > seeder.yaml > built-in default**. Setting `--rows N` on the command line replaces yaml's row
-counts for every table; omit it to let per-table values in `tables.<name>.rows` take effect. A full example with
-comments lives at [`seeder.example.yaml`](./seeder.example.yaml).
+`seeder.yaml` is validated on load: any unknown key (e.g., a typo like `truncates:` instead of `truncate:`) is rejected
+with the line number and field name. A full annotated example lives at
+[`seeder.example.yaml`](./seeder.example.yaml).
+
+Any yaml setting with a CLI equivalent follows the same rule: **CLI flag > seeder.yaml > built-in default**.
+
+| yaml field                    | CLI flag     | Default          | Notes                                                                              |
+|-------------------------------|--------------|------------------|------------------------------------------------------------------------------------|
+| `rows`                        | `--rows`     | `1000`           | When `--rows` is set, it replaces yaml row counts for **every** table.             |
+| `seed`                        | `--seed`     | time-based       | uint64; pin for reproducibility.                                                   |
+| `locale`                      | `--locale`   | `en`             | `en`, `ja`.                                                                        |
+| `truncate`                    | `--truncate` | `false`          | TRUNCATE before insert.                                                            |
+| `tables.<name>.rows`          | —            | top-level `rows` | Per-table override; ignored when `--rows` is set.                                  |
+| `tables.<name>.exclude`       | `--exclude`  | `false`          | Skip the table. `--exclude a,b` on the CLI is equivalent for the listed tables.    |
+| `tables.<name>.columns.<col>` | —            | —                | Per-column override (see below).                                                   |
+| `tables.<name>.polymorphic[]` | —            | —                | Declare Rails-style polymorphic associations (see below).                          |
 
 Per-column overrides under `tables.<name>.columns.<col>` bypass inference for a single column. Set exactly one of:
 
 - `generator: <Name>` — force a built-in generator (e.g., `Email`, `UUID`, `Phone`, `PastDate`). Supplying an unknown
   name surfaces the full known list as part of the preflight error. Built-ins resolve via gofakeit defaults and do not
   switch on `--locale`; use `value:` for a fixed string when you need a specific locale.
-- `value: <literal>` — pin the column to a fixed yaml value (string, number, bool).
+- `value: <literal>` — pin the column to a fixed yaml value. Only scalars (string, number, bool) are accepted; arrays
+  and maps are rejected with a `value must be a scalar` error.
 
 Foreign-key columns are not overridable: yaml entries for them are ignored and the FK pool is used instead, so children
 still point at real parents.
@@ -248,9 +261,8 @@ tables:
 
 `id_col` on a target defaults to that table's first primary-key column; set `id_col: <col>` on the target to point at a
 different column (which must be in the FK pool, e.g., a `UNIQUE` non-PK column). `seeder` also adds the target tables as
-plan dependencies, so parents are seeded before the polymorphic owner.
-
-The yaml `locale` field is equivalent to the `--locale` flag and follows the same precedence.
+plan dependencies, so parents are seeded before the polymorphic owner. Each column may appear in at most one `type_col`
+or `id_col` slot per table; declaring the same column under two polymorphic entries fails preflight.
 
 Pass `--verbose` to see which inference rule each column matched, e.g., when you are debugging why `bio` ended up with a
 long paragraph instead of the short string you expected:

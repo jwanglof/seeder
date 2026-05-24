@@ -239,7 +239,6 @@ func TestApplyTableFilters_YamlExclude(t *testing.T) {
 		{Name: "users"}, {Name: "orders"}, {Name: "audit_log"},
 	}}
 	cfg := config.Config{
-		Version: 1,
 		Tables: map[string]config.TableConfig{
 			"audit_log": {Exclude: true},
 		},
@@ -263,7 +262,6 @@ func TestApplyTableFilters_CLIWinsOverYaml(t *testing.T) {
 		{Name: "users"}, {Name: "orders"}, {Name: "audit_log"},
 	}}
 	cfg := config.Config{
-		Version: 1,
 		Tables: map[string]config.TableConfig{
 			"audit_log": {Exclude: true},
 		},
@@ -283,7 +281,6 @@ func TestBuildInsertOptions_RowsPriority(t *testing.T) {
 	five := 5
 	twenty := 20
 	cfg := config.Config{
-		Version: 1,
 		Rows:    &five,
 		Tables: map[string]config.TableConfig{
 			"users": {Rows: &twenty},
@@ -330,7 +327,7 @@ func TestBuildInsertOptions_SeedPriority(t *testing.T) {
 	t.Parallel()
 
 	yamlSeed := uint64(7)
-	cfg := config.Config{Version: 1, Seed: &yamlSeed}
+	cfg := config.Config{Seed: &yamlSeed}
 
 	cases := []struct {
 		name string
@@ -372,28 +369,28 @@ func TestBuildInsertOptions_TruncatePriority(t *testing.T) {
 			name:        "cli explicit true overrides yaml false",
 			cliTruncate: true,
 			set:         map[string]bool{"truncate": true},
-			cfg:         config.Config{Version: 1, Truncate: &yamlFalse},
+			cfg:         config.Config{Truncate: &yamlFalse},
 			want:        true,
 		},
 		{
 			name:        "yaml true takes effect when cli omits --truncate",
 			cliTruncate: false,
 			set:         map[string]bool{},
-			cfg:         config.Config{Version: 1, Truncate: &yamlTrue},
+			cfg:         config.Config{Truncate: &yamlTrue},
 			want:        true,
 		},
 		{
 			name:        "yaml false takes effect when cli omits --truncate",
 			cliTruncate: false,
 			set:         map[string]bool{},
-			cfg:         config.Config{Version: 1, Truncate: &yamlFalse},
+			cfg:         config.Config{Truncate: &yamlFalse},
 			want:        false,
 		},
 		{
 			name:        "default false when both unset",
 			cliTruncate: false,
 			set:         map[string]bool{},
-			cfg:         config.Config{Version: 1},
+			cfg:         config.Config{},
 			want:        false,
 		},
 	}
@@ -437,7 +434,6 @@ func TestUnknownConfigTables(t *testing.T) {
 
 	five := 5
 	cfg := config.Config{
-		Version: 1,
 		Tables: map[string]config.TableConfig{
 			"users":    {Rows: &five},
 			"usres":    {Rows: &five},   // typo
@@ -459,7 +455,6 @@ func TestUnknownConfigTables_AllKnown(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.Config{
-		Version: 1,
 		Tables: map[string]config.TableConfig{
 			"users":  {Exclude: true},
 			"orders": {Exclude: true},
@@ -478,8 +473,8 @@ func TestRun_ConfigErrors(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	versionMismatch := filepath.Join(dir, "seeder.yaml")
-	if err := os.WriteFile(versionMismatch, []byte("version: 99\n"), 0o600); err != nil {
+	unknownField := filepath.Join(dir, "seeder.yaml")
+	if err := os.WriteFile(unknownField, []byte("truncates: false\n"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
@@ -489,7 +484,7 @@ func TestRun_ConfigErrors(t *testing.T) {
 		want string
 	}{
 		{"missing file", filepath.Join(dir, "does-not-exist.yaml"), "seeder.yaml:"},
-		{"unsupported version", versionMismatch, "unsupported version"},
+		{"unknown field", unknownField, "field truncates not found"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -513,7 +508,7 @@ func TestRun_UnknownLocale(t *testing.T) {
 	// fail the test for unrelated reasons.
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "seeder.yaml")
-	if err := os.WriteFile(cfgPath, []byte("version: 1\n"), 0o600); err != nil {
+	if err := os.WriteFile(cfgPath, []byte(""), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
@@ -555,7 +550,6 @@ func TestValidateColumnGenerators(t *testing.T) {
 	t.Parallel()
 
 	ok := config.Config{
-		Version: 1,
 		Tables: map[string]config.TableConfig{
 			"users": {Columns: map[string]config.ColumnConfig{
 				"email": {Generator: "Email"},
@@ -567,7 +561,6 @@ func TestValidateColumnGenerators(t *testing.T) {
 	}
 
 	bad := config.Config{
-		Version: 1,
 		Tables: map[string]config.TableConfig{
 			"users": {Columns: map[string]config.ColumnConfig{
 				"email": {Generator: "NotAGenerator"},
@@ -587,7 +580,6 @@ func TestUnknownConfigColumns(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.Config{
-		Version: 1,
 		Tables: map[string]config.TableConfig{
 			"users": {Columns: map[string]config.ColumnConfig{
 				"email":  {Generator: "Email"},
@@ -611,7 +603,6 @@ func TestColumnOverrides(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.Config{
-		Version: 1,
 		Tables: map[string]config.TableConfig{
 			"users": {Columns: map[string]config.ColumnConfig{
 				"email":   {Generator: "Email"},

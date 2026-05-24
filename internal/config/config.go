@@ -4,19 +4,16 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
 	"gopkg.in/yaml.v3"
 )
 
-const (
-	CurrentVersion  = 1
-	DefaultFilename = "seeder.yaml"
-)
+const DefaultFilename = "seeder.yaml"
 
 type Config struct {
-	Version  int                    `yaml:"version"`
 	Seed     *uint64                `yaml:"seed,omitempty"`
 	Rows     *int                   `yaml:"rows,omitempty"`
 	Locale   string                 `yaml:"locale,omitempty"`
@@ -72,18 +69,8 @@ func Parse(data []byte) (Config, error) {
 	dec.KnownFields(true)
 
 	var c Config
-	if err := dec.Decode(&c); err != nil {
+	if err := dec.Decode(&c); err != nil && !errors.Is(err, io.EOF) {
 		return Config{}, fmt.Errorf("seeder.yaml: %w", err)
-	}
-
-	if c.Version == 0 {
-		return Config{}, errors.New("seeder.yaml: missing required field `version`")
-	}
-	if c.Version != CurrentVersion {
-		return Config{}, fmt.Errorf(
-			"seeder.yaml: unsupported version %d (this binary understands version %d)",
-			c.Version, CurrentVersion,
-		)
 	}
 
 	if c.Rows != nil && *c.Rows < 0 {

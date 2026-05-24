@@ -13,8 +13,7 @@ import (
 func TestParse_Valid(t *testing.T) {
 	t.Parallel()
 
-	in := []byte(`version: 1
-seed: 42
+	in := []byte(`seed: 42
 rows: 100
 locale: ja
 truncate: true
@@ -29,9 +28,6 @@ tables:
 		t.Fatalf("Parse: %v", err)
 	}
 
-	if got.Version != 1 {
-		t.Errorf("Version = %d, want 1", got.Version)
-	}
 	if got.Seed == nil || *got.Seed != 42 {
 		t.Errorf("Seed = %v, want 42", got.Seed)
 	}
@@ -61,15 +57,12 @@ tables:
 	}
 }
 
-func TestParse_MinimalVersionOnly(t *testing.T) {
+func TestParse_Empty(t *testing.T) {
 	t.Parallel()
 
-	got, err := config.Parse([]byte("version: 1\n"))
+	got, err := config.Parse(nil)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
-	}
-	if got.Version != 1 {
-		t.Errorf("Version = %d, want 1", got.Version)
 	}
 	if got.Seed != nil || got.Rows != nil || got.Truncate != nil {
 		t.Errorf("unset pointer fields should be nil, got Seed=%v Rows=%v Truncate=%v",
@@ -86,50 +79,40 @@ func TestParse_Errors(t *testing.T) {
 		want string
 	}{
 		{
-			name: "missing version",
-			in:   "rows: 10\n",
-			want: "missing required field `version`",
-		},
-		{
-			name: "unsupported version",
-			in:   "version: 2\n",
-			want: "unsupported version 2",
-		},
-		{
 			name: "unknown field",
-			in:   "version: 1\nrowz: 10\n",
+			in:   "rowz: 10\n",
 			want: "field rowz not found",
 		},
 		{
 			name: "negative rows",
-			in:   "version: 1\nrows: -1\n",
+			in:   "rows: -1\n",
 			want: "rows must be >= 0",
 		},
 		{
 			name: "negative table rows",
-			in:   "version: 1\ntables:\n  users:\n    rows: -5\n",
+			in:   "tables:\n  users:\n    rows: -5\n",
 			want: "tables.users.rows must be >= 0",
 		},
 		{
 			name: "column both generator and value",
-			in: "version: 1\ntables:\n  users:\n    columns:\n      email:\n" +
+			in: "tables:\n  users:\n    columns:\n      email:\n" +
 				"        generator: Email\n        value: foo\n",
 			want: "cannot set both `generator` and `value`",
 		},
 		{
 			name: "column neither generator nor value",
-			in:   "version: 1\ntables:\n  users:\n    columns:\n      email: {}\n",
+			in:   "tables:\n  users:\n    columns:\n      email: {}\n",
 			want: "one of `generator` or `value` must be set",
 		},
 		{
 			name: "column value is a map",
-			in: "version: 1\ntables:\n  users:\n    columns:\n      meta:\n" +
+			in: "tables:\n  users:\n    columns:\n      meta:\n" +
 				"        value:\n          key: foo\n",
 			want: "value must be a scalar",
 		},
 		{
 			name: "column value is a list",
-			in: "version: 1\ntables:\n  users:\n    columns:\n      tags:\n" +
+			in: "tables:\n  users:\n    columns:\n      tags:\n" +
 				"        value:\n          - a\n          - b\n",
 			want: "value must be a scalar",
 		},
@@ -152,8 +135,7 @@ func TestParse_Errors(t *testing.T) {
 func TestParse_ColumnOverrides(t *testing.T) {
 	t.Parallel()
 
-	in := []byte(`version: 1
-tables:
+	in := []byte(`tables:
   users:
     columns:
       email:
@@ -205,7 +187,7 @@ func TestAutoDetect_Found(t *testing.T) {
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, config.DefaultFilename)
-	if err := os.WriteFile(path, []byte("version: 1\nrows: 50\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("rows: 50\n"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
