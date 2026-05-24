@@ -6,8 +6,6 @@
 #
 # Precedence: CLI flag > seeder.yaml > built-in default.
 
-version: 1
-
 # Default rows per table (--rows on the command line wins and overrides
 # per-table values below).
 rows: 1000
