@@ -2,6 +2,11 @@
 
 > Zero-config database seeder — one command, realistic data, no factory code.
 
+[![CI](https://github.com/mickamy/seeder/actions/workflows/ci.yaml/badge.svg)](https://github.com/mickamy/seeder/actions/workflows/ci.yaml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/mickamy/seeder)](https://goreportcard.com/report/github.com/mickamy/seeder)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![GitHub Sponsors](https://img.shields.io/github/sponsors/mickamy?label=sponsor&logo=github)](https://github.com/sponsors/mickamy)
+
 `seeder` populates your MySQL or Postgres database with realistic fake data
 straight from the schema. No factory code, no YAML, no AI key. Point it at a
 DSN and it figures out the rest: it introspects your tables, infers what each
@@ -398,4 +403,4 @@ SEEDER_BENCH_DSN=postgres://postgres:pass@localhost:5432/dev?sslmode=disable \
 
 ## License
 
-[MIT](./LICENSE).
+[MIT](./LICENSE)
