@@ -6,6 +6,7 @@ import (
 	"github.com/brianvoe/gofakeit/v7"
 )
 
+//nolint:lll // dictionary rows are formatted to 10 entries; wrapping mid-row would hurt readability.
 var (
 	svLastNames = []string{
 		"Andersson", "Johansson", "Karlsson", "Nilsson", "Eriksson", "Larsson", "Olsson", "Persson", "Svensson", "Gustafsson",

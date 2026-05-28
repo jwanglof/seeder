@@ -1,3 +1,4 @@
+//nolint:testpackage // tests exercise the Swedish dictionary and need access to private generators.
 package infer
 
 import (
