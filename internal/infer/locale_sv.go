@@ -55,7 +55,7 @@ func lastNameSV(f *gofakeit.Faker) any  { return randomFrom(f, svLastNames) }
 func firstNameSV(f *gofakeit.Faker) any { return randomFrom(f, svFirstNames) }
 
 func fullNameSV(f *gofakeit.Faker) any {
-	return fmt.Sprintf("%s %s", randomFrom(f, svFirstNames), randomFrom(f, svLastNames))
+	return fmt.Sprintf("%s %s", firstNameSV(f), lastNameSV(f))
 }
 
 func countySV(f *gofakeit.Faker) any { return randomFrom(f, svCounties) }
@@ -68,8 +68,7 @@ func countrySV(*gofakeit.Faker) any  { return "Sverige" }
 // dictionary.
 func addressSV(f *gofakeit.Faker) any {
 	number := f.Number(1, 200)
-	zip := fmt.Sprintf("%03d %02d", f.Number(100, 999), f.Number(0, 99))
-	return fmt.Sprintf("%s %d, %s %s", randomFrom(f, svStreetNames), number, zip, randomFrom(f, svCities))
+	return fmt.Sprintf("%s %d, %s %s", randomFrom(f, svStreetNames), number, zipSV(f), citySV(f))
 }
 
 // zipSV returns a Swedish postal code in "NNN NN" form (five digits with a
