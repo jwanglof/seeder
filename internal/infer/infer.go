@@ -61,6 +61,7 @@ var nameRules = []nameRule{
 		gens: map[Locale]localeGen{
 			LocaleEN: func(f *gofakeit.Faker) any { return f.FirstName() },
 			LocaleJA: firstNameJA,
+			LocaleSV: firstNameSV,
 		},
 	},
 	{
@@ -70,6 +71,7 @@ var nameRules = []nameRule{
 		gens: map[Locale]localeGen{
 			LocaleEN: func(f *gofakeit.Faker) any { return f.LastName() },
 			LocaleJA: lastNameJA,
+			LocaleSV: lastNameSV,
 		},
 	},
 	{
@@ -79,6 +81,7 @@ var nameRules = []nameRule{
 		gens: map[Locale]localeGen{
 			LocaleEN: func(f *gofakeit.Faker) any { return f.Name() },
 			LocaleJA: fullNameJA,
+			LocaleSV: fullNameSV,
 		},
 	},
 	{
@@ -88,6 +91,7 @@ var nameRules = []nameRule{
 		gens: map[Locale]localeGen{
 			LocaleEN: func(f *gofakeit.Faker) any { return f.Phone() },
 			LocaleJA: phoneJA,
+			LocaleSV: phoneSV,
 		},
 	},
 	{
@@ -115,6 +119,7 @@ var nameRules = []nameRule{
 		gens: map[Locale]localeGen{
 			LocaleEN: func(f *gofakeit.Faker) any { return f.Address().Address },
 			LocaleJA: addressJA,
+			LocaleSV: addressSV,
 		},
 	},
 	{
@@ -124,6 +129,7 @@ var nameRules = []nameRule{
 		gens: map[Locale]localeGen{
 			LocaleEN: func(f *gofakeit.Faker) any { return f.City() },
 			LocaleJA: cityJA,
+			LocaleSV: citySV,
 		},
 	},
 	{
@@ -133,6 +139,7 @@ var nameRules = []nameRule{
 		gens: map[Locale]localeGen{
 			LocaleEN: func(f *gofakeit.Faker) any { return f.Country() },
 			LocaleJA: countryJA,
+			LocaleSV: countrySV,
 		},
 	},
 	{
@@ -142,6 +149,7 @@ var nameRules = []nameRule{
 		gens: map[Locale]localeGen{
 			LocaleEN: func(f *gofakeit.Faker) any { return f.State() },
 			LocaleJA: prefectureJA,
+			LocaleSV: countySV,
 		},
 	},
 	{
@@ -151,6 +159,7 @@ var nameRules = []nameRule{
 		gens: map[Locale]localeGen{
 			LocaleEN: func(f *gofakeit.Faker) any { return f.Zip() },
 			LocaleJA: zipJA,
+			LocaleSV: zipSV,
 		},
 	},
 	{

@@ -10,6 +10,7 @@ type Locale string
 const (
 	LocaleEN Locale = ""
 	LocaleJA Locale = "ja"
+	LocaleSV Locale = "sv"
 )
 
 // ParseLocale accepts the user-facing flag value and returns the canonical
@@ -20,7 +21,9 @@ func ParseLocale(s string) (Locale, error) {
 		return LocaleEN, nil
 	case "ja":
 		return LocaleJA, nil
+	case "sv":
+		return LocaleSV, nil
 	default:
-		return "", fmt.Errorf("unknown locale %q (supported: en, ja)", s)
+		return "", fmt.Errorf("unknown locale %q (supported: en, ja, sv)", s)
 	}
 }
