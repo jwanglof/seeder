@@ -98,7 +98,7 @@ FLAGS:
   --config <file>  Path to seeder.yaml (default: auto-detect ./seeder.yaml)
   --dry-run        Print plan, do not insert
   --exclude string Comma-separated tables to skip (cannot combine with --tables)
-  --locale string  Locale for name-rule generators (en, ja; default: en)
+  --locale string  Locale for name-rule generators (en, ja, sv; default: en)
   --output string  Alternate output: sql | ndjson (default: insert into DB)
   --rate int       Rows per second across tables when --stream is set
   --rows int       Rows per table (default: 1000; overrides yaml when set)
@@ -226,7 +226,7 @@ Any yaml setting with a CLI equivalent follows the same rule: **CLI flag > seede
 |-------------------------------|--------------|------------------|------------------------------------------------------------------------------------|
 | `rows`                        | `--rows`     | `1000`           | When `--rows` is set, it replaces yaml row counts for **every** table.             |
 | `seed`                        | `--seed`     | time-based       | uint64; pin for reproducibility.                                                   |
-| `locale`                      | `--locale`   | `en`             | `en`, `ja`.                                                                        |
+| `locale`                      | `--locale`   | `en`             | `en`, `ja`, `sv`.                                                                  |
 | `truncate`                    | `--truncate` | `false`          | TRUNCATE before insert.                                                            |
 | `tables.<name>.rows`          | —            | top-level `rows` | Per-table override; ignored when `--rows` is set.                                  |
 | `tables.<name>.exclude`       | `--exclude`  | `false`          | Skip the table. `--exclude a,b` on the CLI is equivalent for the listed tables.    |
@@ -387,7 +387,7 @@ a random parent PK for each FK column.
 
 Composite FKs and polymorphic associations (yaml-declared) are supported,
 along with `--output sql` / `--output ndjson` and `--stream --rate` for
-CDC-style continuous load. English and Japanese locales. JSON / JSONB
+CDC-style continuous load. English, Japanese, and Swedish locales. JSON / JSONB
 columns still emit randomly-structured placeholder values. Out of scope for
 now: more locales, LLM-assisted text, existing-DB statistics sampling.
 

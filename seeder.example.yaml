@@ -17,7 +17,7 @@ seed: 42
 # TRUNCATE before insert (--truncate on the command line wins).
 truncate: false
 
-# Locale for inferred text values (en, ja). --locale on the command line wins.
+# Locale for inferred text values (en, ja, sv). --locale on the command line wins.
 locale: en
 
 # Per-table overrides.
