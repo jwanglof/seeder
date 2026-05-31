@@ -32,6 +32,7 @@ type TableConfig struct {
 type ColumnConfig struct {
 	Generator string `yaml:"generator,omitempty"`
 	Value     any    `yaml:"value,omitempty"`
+	Exclude   bool   `yaml:"exclude,omitempty"`
 }
 
 // PolymorphicConfig declares a Rails-style polymorphic association: TypeColumn
@@ -111,6 +112,15 @@ func Parse(data []byte) (Config, error) {
 func validateColumn(table, col string, cc ColumnConfig) error {
 	hasGen := cc.Generator != ""
 	hasVal := cc.Value != nil
+	if cc.Exclude {
+		if hasGen || hasVal {
+			return fmt.Errorf(
+				"seeder.yaml: tables.%s.columns.%s: cannot set 'generator' or 'value' when 'exclude' is true",
+				table, col,
+			)
+		}
+		return nil
+	}
 	switch {
 	case hasGen && hasVal:
 		return fmt.Errorf("seeder.yaml: tables.%s.columns.%s: cannot set both `generator` and `value`", table, col)
